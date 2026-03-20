@@ -796,25 +796,3 @@ exports.getNearbyProperties = async (req, res) => {
     res.status(500).json({ error: "Failed to fetch nearby listings." });
   }
 };
-module.exports = {
-  createProperty,
-  getAllProperties,
-  searchProperties,
-  getPropertyById,
-  updateProperty,
-  deleteProperty,
-  toggleVisibility,
-  getPropertiesByOwner,
-  getUserWaitlist,
-  addToWaitlist,
-  removeFromWaitlist,
-  logView,
-  getViewed,
-  addInquiry,
-  getInquiriesByOwner,
-  getUnpaidCommissions,
-  updateCommissionStatus,
-  getPaidCommissions,
-  getAdminLeads,
-  getNearbyProperties,
-};
