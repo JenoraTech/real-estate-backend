@@ -1,11 +1,32 @@
-const BASE_URL = "http://172.20.10.4:5000/";
-const db = require("../config/db"); // Renamed from db_pg to match your code usage
+const BASE_URL = "https://real-estate-backend-4kfq.onrender.com/";
+const db = require("../config/db");
 const { Property, PropertyImage } = require("../models");
 const fs = require("fs");
 const path = require("path");
-// Use this to keep your existing code working with Sequelize
+
+// Use this to keep your existing code working with Sequelize if needed
 const db_pg = db.sequelize;
 
+/**
+ * INTERNAL HELPER: runQuery
+ * This ensures that even if your db.js exports a pool, a client, or a helper,
+ * the .query() calls throughout this 900+ line file will NOT crash.
+ */
+const runQuery = async (text, params) => {
+  try {
+    if (typeof db.query === "function") {
+      return await db.query(text, params);
+    } else if (db.pool && typeof db.pool.query === "function") {
+      return await db.pool.query(text, params);
+    } else {
+      throw new Error(
+        "Database configuration error: .query() is not available.",
+      );
+    }
+  } catch (err) {
+    throw err;
+  }
+};
 exports.createProperty = async (req, res) => {
   const {
     title,
