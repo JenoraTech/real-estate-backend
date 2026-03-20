@@ -1,4 +1,5 @@
-const pool = require("../config/db");
+const pool = require("../config/db"); // This is for your raw SQL queries
+const db = require("../config/db"); // Add this line so 'db' is defined
 // Use this to keep your existing code working with Sequelize
 const db_pg = db.sequelize;
 
