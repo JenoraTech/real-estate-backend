@@ -1,6 +1,6 @@
 // propertyController.js
 const BASE_URL = "https://real-estate-backend-4kfq.onrender.com/";
-const db = require("../config/db");
+const dbConfig = require("../config/db");
 const {
   Property,
   PropertyImage,
@@ -14,28 +14,42 @@ const {
 const fs = require("fs");
 const path = require("path");
 
-// Use this to keep your existing code working with Sequelize if needed
-const db_pg = db.sequelize;
-
 /**
- * INTERNAL HELPER: runQuery
- * This ensures that even if your db.js exports a pool, a client, or a helper,
- * the .query() calls throughout this file will NOT crash.
+ * 🛠️ DATABASE BRIDGE (The Fix)
+ * This ensures 'db.query' and 'db.connect' work regardless of your config/db.js setup.
  */
-const runQuery = async (text, params) => {
-  try {
-    if (typeof db.query === "function") {
-      return await db.query(text, params);
-    } else if (db.pool && typeof db.pool.query === "function") {
-      return await db.pool.query(text, params);
-    } else {
-      throw new Error(
-        "Database configuration error: .query() is not available.",
-      );
+const db = {
+  query: async (text, params) => {
+    // 1. Try direct query (Pool/Client)
+    if (typeof dbConfig.query === "function") {
+      return await dbConfig.query(text, params);
     }
-  } catch (err) {
-    throw err;
-  }
+    // 2. Try Sequelize raw query (common in Render/Sequelize setups)
+    if (dbConfig.sequelize) {
+      const [results] = await dbConfig.sequelize.query(text, {
+        bind: params || [],
+        type: dbConfig.sequelize.QueryTypes.SELECT,
+      });
+      return {
+        rows: Array.isArray(results) ? results : [results],
+        rowCount: Array.isArray(results) ? results.length : 1,
+      };
+    }
+    throw new Error(
+      "Database connection error: .query() not found on db import.",
+    );
+  },
+  connect: async () => {
+    // Required for your transaction logic in updateProperty
+    const connection = dbConfig.sequelize || dbConfig;
+    return {
+      query: async (text, params) => {
+        const [results] = await connection.query(text, { bind: params || [] });
+        return { rows: Array.isArray(results) ? results : [results] };
+      },
+      release: () => {}, // Mock release for sequelize
+    };
+  },
 };
 
 // ======================= CREATE PROPERTY =======================
@@ -185,17 +199,11 @@ exports.getAllProperties = async (req, res) => {
       SELECT 
         p.*,
         u.full_name AS owner_name,
-
         COALESCE(r.avg_rating, 0.0) AS average_rating,
         COALESCE(r.total_reviews, 0) AS total_reviews,
-
         pi.image_url AS thumbnail
-
       FROM properties p
-
-      LEFT JOIN users u 
-        ON p.owner_id = u.id
-
+      LEFT JOIN users u ON p.owner_id = u.id
       LEFT JOIN (
         SELECT 
           owner_id::text AS owner_id,
@@ -203,24 +211,19 @@ exports.getAllProperties = async (req, res) => {
           COUNT(*)::int AS total_reviews
         FROM "Reviews"
         GROUP BY owner_id::text
-      ) r 
-      ON r.owner_id = p.owner_id::text
-
+      ) r ON r.owner_id = p.owner_id::text
       LEFT JOIN LATERAL (
         SELECT image_url
         FROM property_images
         WHERE property_id::text = p.id::text
         LIMIT 1
       ) pi ON true
-
       WHERE (u.is_blocked = false OR u.is_blocked IS NULL)
-
       ORDER BY p.created_at DESC;
     `;
 
     const result = await db.query(queryText);
 
-    // Map thumbnail to full URL
     result.rows.forEach((p) => {
       if (p.thumbnail) p.thumbnail = `${BASE_URL}${p.thumbnail}`;
     });
@@ -251,7 +254,6 @@ exports.getPropertiesByOwner = async (req, res) => {
 
     const result = await db.query(queryText, [owner_id]);
 
-    // Map image URLs to full paths
     result.rows.forEach((p) => {
       if (p.thumbnail) p.thumbnail = `${BASE_URL}${p.thumbnail}`;
       if (p.image_urls)
@@ -286,6 +288,7 @@ exports.updateProperty = async (req, res) => {
 
   try {
     client = await db.connect();
+    // Use raw query for BEGIN if using standard PG client
     await client.query("BEGIN");
 
     const propertyCheck = await client.query(
@@ -322,7 +325,6 @@ exports.updateProperty = async (req, res) => {
 
     const address = `${street || currentProperty.street}, ${city || currentProperty.city}, ${lga || currentProperty.lga}, ${state || currentProperty.state}`;
 
-    // Handle images
     let finalImages = currentProperty.image_urls;
     if (req.files && req.files.length > 0) {
       const oldImages = await client.query(
@@ -410,19 +412,12 @@ exports.updateProperty = async (req, res) => {
   }
 };
 
-// ======= KEEP ALL OTHER EXISTING FUNCTIONS AS IS =======
-// deleteProperty, toggleVisibility, getAdminLeads, getUserWaitlist, addToWaitlist,
-// removeFromWaitlist, logView, getViewed, addInquiry, getInquiriesByOwner,
-// getNearbyProperties, getPropertyById, searchProperties, getPaidCommissions,
-// getUnpaidCommissions, updateCommissionStatus
-
 exports.deleteProperty = async (req, res) => {
   const { id } = req.params;
-  const userId = req.user.id; // Extracted from JWT via verifyToken
-  const userRole = req.user.role; // Extracted from JWT via verifyToken
+  const userId = req.user.id;
+  const userRole = req.user.role;
 
   try {
-    // 1. Fetch the property first to check existence and identify the owner
     const propertyCheck = await db.query(
       "SELECT * FROM properties WHERE id = $1",
       [id],
@@ -433,8 +428,6 @@ exports.deleteProperty = async (req, res) => {
     }
 
     const property = propertyCheck.rows[0];
-
-    // 2. Authorization: Allow if the user is the Owner OR an Admin
     const isOwner = property.owner_id.toString() === userId.toString();
     const isAdmin = userRole === "admin";
 
@@ -445,36 +438,27 @@ exports.deleteProperty = async (req, res) => {
       });
     }
 
-    // 3. Fetch associated image paths to clean up server storage
     const imageQuery = await db.query(
       "SELECT image_url FROM property_images WHERE property_id = $1",
       [id],
     );
 
-    // 4. Delete physical files from the filesystem
     if (imageQuery.rows.length > 0) {
       imageQuery.rows.forEach((row) => {
-        // Ensure path logic points to your actual uploads folder
         const filePath = path.join(__dirname, "..", row.image_url);
-
         if (fs.existsSync(filePath)) {
           fs.unlink(filePath, (err) => {
-            if (err) {
+            if (err)
               console.error(`Failed to delete file: ${filePath}`, err.message);
-            }
           });
         }
       });
     }
 
-    // 5. Database Cleanup (Atomic Deletion)
-    // Delete dependent records first to avoid Foreign Key violations
     await db.query("DELETE FROM property_images WHERE property_id = $1", [id]);
     await db.query("DELETE FROM property_commissions WHERE property_id = $1", [
       id,
     ]);
-
-    // Finally, delete the main property record
     const deleteResult = await db.query(
       "DELETE FROM properties WHERE id = $1",
       [id],
@@ -493,9 +477,10 @@ exports.deleteProperty = async (req, res) => {
     res.status(500).json({ error: "Internal server error during deletion." });
   }
 };
+
 exports.toggleVisibility = async (req, res) => {
   const { id } = req.params;
-  const { is_hidden } = req.body; // Flutter sends {"is_hidden": true/false}
+  const { is_hidden } = req.body;
 
   try {
     const result = await db.query(
@@ -517,12 +502,6 @@ exports.toggleVisibility = async (req, res) => {
   }
 };
 
-// ✅ Get all seeker leads for the admin dashboard
-// ... keep your existing db imports ...
-
-/**
- * @desc    Get ALL leads for Admin screen (Your existing code)
- */
 exports.getAdminLeads = async (req, res) => {
   try {
     const result = await db.query(`
@@ -538,34 +517,20 @@ exports.getAdminLeads = async (req, res) => {
             JOIN properties p ON w.property_id = p.id
             ORDER BY w.created_at DESC
         `);
-
     res.status(200).json(result.rows);
   } catch (error) {
-    console.error("Leads Fetch Error:", error.message);
-    res.status(500).json({
-      message: "Error fetching leads",
-      error: error.message,
-    });
+    res
+      .status(500)
+      .json({ message: "Error fetching leads", error: error.message });
   }
 };
 
-/**
- * ✅ NEW: Get Waitlist for CURRENT seeker only
- * @route   GET /api/properties/waitlist
- */
 exports.getUserWaitlist = async (req, res) => {
   try {
-    const user_id = req.user.id; // This is the UUID from verifyToken
-
-    // We MUST join with properties to get the full data for the Seeker
-    // UPDATED: Added owner rating to waitlist view
+    const user_id = req.user.id;
     const result = await db.query(
       `
-      SELECT 
-        p.*,
-        u.full_name AS owner_name,
-        u.average_rating,
-        u.total_reviews
+      SELECT p.*, u.full_name AS owner_name, u.average_rating, u.total_reviews
       FROM properties p
       INNER JOIN waitlist w ON p.id = w.property_id
       JOIN users u ON p.owner_id = u.id
@@ -573,226 +538,235 @@ exports.getUserWaitlist = async (req, res) => {
     `,
       [user_id],
     );
-
-    console.log(
-      `Fetched ${result.rows.length} waitlist items for user ${user_id}`,
-    );
     res.status(200).json(result.rows);
   } catch (error) {
-    console.error("Sync Error:", error.message);
     res.status(500).json({ error: "Failed to fetch your saved properties" });
   }
 };
 
-/**
- * @desc    Add property to waitlist (Your existing code)
- */
 exports.addToWaitlist = async (req, res) => {
   try {
     const { property_id } = req.body;
     const user_id = req.user.id;
-
-    if (!property_id) {
+    if (!property_id)
       return res.status(400).json({ error: "Property ID is required" });
-    }
 
     const existing = await db.query(
       "SELECT * FROM waitlist WHERE user_id = $1 AND property_id = $2",
       [user_id, property_id],
     );
 
-    if (existing.rows.length > 0) {
+    if (existing.rows.length > 0)
       return res.status(200).json({ message: "Already in waitlist" });
-    }
 
     await db.query(
       "INSERT INTO waitlist (user_id, property_id) VALUES ($1, $2)",
       [user_id, property_id],
     );
-
     res.status(201).json({ success: true, message: "Lead created" });
   } catch (error) {
-    console.error("Waitlist Add Error:", error.message);
     res.status(500).json({ error: "Internal server error" });
   }
 };
 
-/**
- * @desc    Remove property from waitlist (Your existing code)
- */
 exports.removeFromWaitlist = async (req, res) => {
   try {
     const { property_id } = req.params;
     const user_id = req.user.id;
-
     await db.query(
       "DELETE FROM waitlist WHERE user_id = $1 AND property_id = $2",
       [user_id, property_id],
     );
-
     res.status(200).json({ success: true, message: "Lead removed" });
   } catch (error) {
-    console.error("Waitlist Remove Error:", error.message);
     res.status(500).json({ error: "Internal server error" });
   }
 };
 
-/**
- * ✅ NEW: Log a property view
- * @route   POST /api/properties/viewed
- */
 exports.logView = async (req, res) => {
   try {
     const { property_id } = req.body;
     const user_id = req.user.id;
-
-    // Use UPSERT (Update or Insert) to refresh the viewed_at timestamp
     await db.query(
-      `
-      INSERT INTO property_views (user_id, property_id) 
-      VALUES ($1, $2) 
-      ON CONFLICT (user_id, property_id) 
-      DO UPDATE SET viewed_at = NOW()
-    `,
+      `INSERT INTO property_views (user_id, property_id) VALUES ($1, $2) 
+       ON CONFLICT (user_id, property_id) DO UPDATE SET viewed_at = NOW()`,
       [user_id, property_id],
     );
-
     res.sendStatus(200);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 };
 
-/**
- * ✅ NEW: Get recently viewed for Seeker
- * @route   GET /api/properties/viewed
- */
 exports.getViewed = async (req, res) => {
   try {
     const user_id = req.user.id;
-
-    // UPDATED: Join with users to provide owner info for recently viewed items
     const result = await db.query(
       `
-      SELECT p.*,
-      u.full_name AS owner_name,
-      u.average_rating,
-      u.total_reviews
+      SELECT p.*, u.full_name AS owner_name, u.average_rating, u.total_reviews
       FROM properties p
       JOIN property_views v ON p.id = v.property_id::uuid
       JOIN users u ON p.owner_id = u.id
       WHERE v.user_id = $1::uuid
-      ORDER BY v.viewed_at DESC 
-      LIMIT 10
+      ORDER BY v.viewed_at DESC LIMIT 10
       `,
       [user_id],
     );
-
     res.status(200).json(result.rows);
   } catch (error) {
-    console.error("❌ Database Error:", error.message);
     res.status(500).json({ error: error.message });
   }
 };
-/**
- * @desc    Create a new inquiry (Matches your table schema)
- */
+
 exports.addInquiry = async (req, res) => {
   const { property_id, message, contact_phone } = req.body;
-  const seeker_id = req.user.id; // From verifyToken
-
+  const seeker_id = req.user.id;
   try {
     const result = await db.query(
       `INSERT INTO inquiries (property_id, seeker_id, message, contact_phone) 
-             VALUES ($1, $2, $3, $4) RETURNING *`,
+       VALUES ($1, $2, $3, $4) RETURNING *`,
       [property_id, seeker_id, message, contact_phone],
     );
-
-    res.status(201).json({
-      success: true,
-      data: result.rows[0],
-    });
+    res.status(201).json({ success: true, data: result.rows[0] });
   } catch (error) {
-    console.error("Inquiry Insert Error:", error.message);
     res.status(500).json({ error: "Failed to send inquiry" });
   }
 };
 
-/**
- * @desc    Get inquiries for a specific owner
- */
 exports.getInquiriesByOwner = async (req, res) => {
   const { owner_id } = req.params;
-
   try {
     const result = await db.query(
-      `
-            SELECT 
-                i.id AS inquiry_id,
-                i.message,
-                i.seeker_id,   -- Added seeker_id for internal chat linking
-                i.contact_phone,
-                i.status,
-                i.created_at,
-                u.full_name AS seeker_name,
-                u.email AS seeker_email,
-                p.title AS property_title,
-                p.location
-            FROM inquiries i
-            JOIN users u ON i.seeker_id = u.id 
-            JOIN properties p ON i.property_id = p.id
-            WHERE p.owner_id = $1
-            ORDER BY i.created_at DESC
-        `,
+      `SELECT i.id AS inquiry_id, i.message, i.seeker_id, i.contact_phone, i.status, i.created_at,
+              u.full_name AS seeker_name, u.email AS seeker_email, p.title AS property_title, p.location
+       FROM inquiries i
+       JOIN users u ON i.seeker_id = u.id 
+       JOIN properties p ON i.property_id = p.id
+       WHERE p.owner_id = $1 ORDER BY i.created_at DESC`,
       [owner_id],
     );
-
     res.status(200).json(result.rows);
   } catch (error) {
-    console.error("Fetch Inquiries Error:", error.message);
     res.status(500).json({ error: "Failed to fetch inquiries" });
   }
 };
-exports.getNearbyProperties = async (req, res) => {
-  // lat/lng from user's current location, radius in kilometers
-  const { lat, lng, radius = 10 } = req.query;
 
-  if (!lat || !lng) {
+exports.getNearbyProperties = async (req, res) => {
+  const { lat, lng, radius = 10 } = req.query;
+  if (!lat || !lng)
     return res
       .status(400)
       .json({ error: "Location coordinates are required." });
-  }
-
   try {
     const nearbyProperties = await db.query(
-      `SELECT *, (
-          6371 * acos(
-            cos(radians($1)) * cos(radians(latitude)) * cos(radians(longitude) - radians($2)) + 
-            sin(radians($1)) * sin(radians(latitude))
-          )
-        ) AS distance_km
-        FROM properties
-        WHERE status = 'active' 
-        AND latitude IS NOT NULL 
-        AND longitude IS NOT NULL
-        AND (
-          6371 * acos(
-            cos(radians($1)) * cos(radians(latitude)) * cos(radians(longitude) - radians($2)) + 
-            sin(radians($1)) * sin(radians(latitude))
-          )
-        ) <= $3
-        ORDER BY distance_km ASC
-        LIMIT 25`,
+      `SELECT *, (6371 * acos(cos(radians($1)) * cos(radians(latitude)) * cos(radians(longitude) - radians($2)) + sin(radians($1)) * sin(radians(latitude)))) AS distance_km
+        FROM properties WHERE status = 'active' AND latitude IS NOT NULL AND longitude IS NOT NULL
+        AND (6371 * acos(cos(radians($1)) * cos(radians(latitude)) * cos(radians(longitude) - radians($2)) + sin(radians($1)) * sin(radians(latitude)))) <= $3
+        ORDER BY distance_km ASC LIMIT 25`,
       [lat, lng, radius],
     );
-
     res.status(200).json({
       success: true,
       count: nearbyProperties.rows.length,
       data: nearbyProperties.rows,
     });
   } catch (err) {
-    console.error("Nearby search error:", err.message);
     res.status(500).json({ error: "Failed to fetch nearby listings." });
+  }
+};
+
+exports.getPropertyById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.query(
+      `SELECT p.*, u.full_name AS owner_name, u.phone AS owner_phone, u.email AS owner_email,
+              (SELECT array_agg(image_url) FROM property_images WHERE property_id = p.id) as image_urls
+       FROM properties p JOIN users u ON p.owner_id = u.id WHERE p.id = $1`,
+      [id],
+    );
+    if (result.rows.length === 0)
+      return res.status(404).json({ error: "Property not found" });
+    const property = result.rows[0];
+    if (property.image_urls)
+      property.image_urls = property.image_urls.map(
+        (url) => `${BASE_URL}${url}`,
+      );
+    res.json(property);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.searchProperties = async (req, res) => {
+  const { q, category, minPrice, maxPrice, state, lga } = req.query;
+  try {
+    let queryText =
+      "SELECT p.*, u.full_name as owner_name FROM properties p JOIN users u ON p.owner_id = u.id WHERE p.is_hidden = false";
+    const values = [];
+    if (q) {
+      values.push(`%${q}%`);
+      queryText += ` AND (p.title ILIKE $${values.length} OR p.description ILIKE $${values.length})`;
+    }
+    if (category) {
+      values.push(category);
+      queryText += ` AND p.category = $${values.length}`;
+    }
+    if (minPrice) {
+      values.push(minPrice);
+      queryText += ` AND p.price >= $${values.length}`;
+    }
+    if (maxPrice) {
+      values.push(maxPrice);
+      queryText += ` AND p.price <= $${values.length}`;
+    }
+    if (state) {
+      values.push(state);
+      queryText += ` AND p.state = $${values.length}`;
+    }
+    if (lga) {
+      values.push(lga);
+      queryText += ` AND p.lga = $${values.length}`;
+    }
+    queryText += " ORDER BY p.created_at DESC";
+    const result = await db.query(queryText, values);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getPaidCommissions = async (req, res) => {
+  try {
+    const result = await db.query(
+      "SELECT * FROM property_commissions WHERE status = 'paid'",
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getUnpaidCommissions = async (req, res) => {
+  try {
+    const result = await db.query(
+      "SELECT * FROM property_commissions WHERE status = 'unpaid'",
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.updateCommissionStatus = async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+  try {
+    const result = await db.query(
+      "UPDATE property_commissions SET status = $1 WHERE id = $2 RETURNING *",
+      [status, id],
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 };
