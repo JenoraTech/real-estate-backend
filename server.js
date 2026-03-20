@@ -142,7 +142,14 @@ app.use(
 );
 
 app.use(express.json());
+
+// ✅ STATIC FILE SERVING (CRITICAL FOR IMAGES)
+// This ensures that http://.../uploads/properties/image.jpg maps correctly to the folder
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use(
+  "/uploads/properties",
+  express.static(path.join(__dirname, "uploads/properties")),
+);
 app.use("/uploads/chat", express.static(path.join(__dirname, "uploads/chat")));
 
 app.use((req, res, next) => {
