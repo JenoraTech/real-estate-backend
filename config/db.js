@@ -1,18 +1,16 @@
 const { Sequelize, DataTypes } = require("sequelize");
 require("dotenv").config();
 
-// Initializing Sequelize with the corrected Supabase Connection String
+// Initialize Sequelize with Supabase PostgreSQL
 const sequelize = new Sequelize(process.env.DATABASE_URL, {
   dialect: "postgres",
   protocol: "postgres",
   dialectOptions: {
     ssl: {
       require: true,
-      rejectUnauthorized: false, // Required for Supabase/AWS
+      rejectUnauthorized: false, // Required for Supabase
     },
-    // CRITICAL: Supabase Pooler (6543) requires this to prevent
-    // "prepared statement already exists" or "not found" errors.
-    prepareThreshold: 0,
+    prepareThreshold: 0, // Important for Supabase pooler
   },
   logging: false,
   pool: {
@@ -23,12 +21,22 @@ const sequelize = new Sequelize(process.env.DATABASE_URL, {
   },
 });
 
+// Test DB connection (VERY IMPORTANT)
+(async () => {
+  try {
+    await sequelize.authenticate();
+    console.log("✅ Database connected successfully");
+  } catch (error) {
+    console.error("❌ Database connection failed:", error.message);
+  }
+})();
+
 const db = {};
+
 db.Sequelize = Sequelize;
 db.sequelize = sequelize;
 
 // --- Models ---
-// Note: Ensure these paths match your folder structure exactly
 db.User = require("../models/user")(sequelize, DataTypes);
 db.Property = require("../models/property")(sequelize, DataTypes);
 db.PropertyImage = require("../models/propertyImage")(sequelize, DataTypes);
@@ -36,7 +44,7 @@ db.Review = require("../models/Review")(sequelize, DataTypes);
 
 // --- Associations ---
 
-// A property has many images - Deleting a property automatically deletes its image records
+// Property → Images
 db.Property.hasMany(db.PropertyImage, {
   foreignKey: "property_id",
   onDelete: "CASCADE",
@@ -45,7 +53,7 @@ db.PropertyImage.belongsTo(db.Property, {
   foreignKey: "property_id",
 });
 
-// User to Property Relationship
+// User → Property
 db.User.hasMany(db.Property, {
   foreignKey: "owner_id",
 });
@@ -54,7 +62,7 @@ db.Property.belongsTo(db.User, {
   foreignKey: "owner_id",
 });
 
-// Review Relationship
+// Property → Review
 db.Property.hasMany(db.Review, {
   foreignKey: "property_id",
   onDelete: "CASCADE",
