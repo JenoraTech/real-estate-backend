@@ -1,11 +1,31 @@
 const bcrypt = require("bcryptjs");
-const db = require("../config/db");
+const dbConfig = require("../config/db"); // Renamed to avoid confusion
 const jwt = require("jsonwebtoken");
-// Use this to keep your existing code working with Sequelize
-const db_pg = db.sequelize;
+
+// ✅ THE CRITICAL BRIDGE:
+// This ensures that 'db.query' and 'pool.query' calls work with Sequelize.
+const db = {
+  query: async (text, params) => {
+    // Sequelize returns [results, metadata]. We return results in a 'rows' object
+    // to match your existing code's 'result.rows' logic.
+    const [results] = await dbConfig.sequelize.query(text, {
+      bind: params,
+      type: dbConfig.sequelize.QueryTypes.SELECT,
+    });
+    return {
+      rows: results || [],
+      rowCount: results ? results.length : 0,
+    };
+  },
+};
+
+// Supporting the different variable names used in your code
+const pool = db;
+const db_pg = dbConfig.sequelize;
+
 /**
  * @desc    Fetch all users for Admin Dashboard
- * @access  Private/Admin
+ * @access  Privatea/Admin
  */
 exports.getAllUsers = async (req, res) => {
   try {
@@ -22,6 +42,7 @@ exports.getAllUsers = async (req, res) => {
     res.status(500).json({ error: "Failed to fetch users: " + err.message });
   }
 };
+
 /**
  * @desc    Admin Manual Block/Unblock
  * @access  Private/Admin
@@ -48,7 +69,7 @@ exports.toggleUserBlock = async (req, res) => {
     res.status(500).json({ error: "Update failed: " + err.message });
   }
 };
-const pool = require("../config/db");
+
 exports.getAdminId = async (req, res) => {
   try {
     const result = await pool.query(
@@ -72,6 +93,7 @@ exports.getAdminId = async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
+
 exports.acceptTerms = async (req, res) => {
   try {
     // req.user.id is populated by your verifyToken middleware
