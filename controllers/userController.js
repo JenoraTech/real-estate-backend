@@ -3,10 +3,9 @@ const dbConfig = require("../config/db"); // Renamed to avoid confusion
 const jwt = require("jsonwebtoken");
 
 // ✅ THE CRITICAL BRIDGE:
-// This ensures that 'db.query' and 'pool.query' calls work with Sequelize.
+// Fixed to ensure multiple rows (like all 4 users) are returned correctly.
 const db = {
   query: async (text, params) => {
-    // Determine if it's a SELECT or an UPDATE/INSERT
     const isSelect = text.trim().toUpperCase().startsWith("SELECT");
 
     const [results, metadata] = await dbConfig.sequelize.query(text, {
@@ -16,13 +15,21 @@ const db = {
         : dbConfig.sequelize.QueryTypes.RAW,
     });
 
-    // We normalize the response to match the 'pg' library format (result.rows)
-    // so the rest of your functioning code doesn't need to change.
-    const rows = Array.isArray(results) ? results : results?.rows || [results];
+    // ✅ FIX: In Sequelize SELECT mode, results IS the array of rows.
+    // In RAW mode (for UPDATE/INSERT), the rows are usually in results.rows.
+    let rows = [];
+    if (isSelect) {
+      rows = Array.isArray(results) ? results : [results];
+    } else {
+      rows = results?.rows || (Array.isArray(results) ? results : [results]);
+    }
+
+    // Final safety: filter out any null/empty ghost objects
+    const finalRows = rows.filter((row) => row && Object.keys(row).length > 0);
 
     return {
-      rows: rows || [],
-      rowCount: Array.isArray(rows) ? rows.length : metadata?.rowCount || 0,
+      rows: finalRows || [],
+      rowCount: finalRows.length,
     };
   },
 };
