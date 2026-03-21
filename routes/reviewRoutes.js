@@ -6,7 +6,7 @@ const { verifyToken } = require("../middleware/auth");
 // ======================= POST A NEW REVIEW =======================
 router.post("/add", verifyToken, async (req, res) => {
   try {
-    let { owner_id, property_id, rating, comment } = req.body;
+    const { owner_id, rating, comment } = req.body;
 
     // Safety check for user from middleware
     if (!req.user || !req.user.id) {
@@ -15,29 +15,23 @@ router.post("/add", verifyToken, async (req, res) => {
 
     const seeker_id = req.user.id;
 
-    // Normalize property_id to handle empty strings from Flutter
-    if (!property_id || property_id === "" || property_id === "null") {
-      property_id = null;
-    }
-
-    // 1️⃣ Insert the Review into "reviews" (Standard Lowercase)
+    // 1️⃣ Insert the Review into "reviews"
+    // Note: property_id is removed as it's not in your table
     const insertQuery = `
-      INSERT INTO reviews (seeker_id, owner_id, property_id, rating, comment, created_at)
-      VALUES ($1, $2, $3, $4, $5, NOW())
+      INSERT INTO reviews (seeker_id, owner_id, rating, comment, created_at)
+      VALUES ($1, $2, $3, $4, NOW())
       RETURNING *
     `;
     const reviewResult = await db.query(insertQuery, [
       seeker_id.toString(),
       owner_id.toString(),
-      property_id,
       rating,
       comment,
     ]);
     const newReview = reviewResult.rows[0];
 
-    // 2️⃣ Recalculate and Update Owner/Property Stats
+    // 2️⃣ Recalculate and Update Owner Stats in 'users' table
     try {
-      // Update Owner Stats
       const ownerStatsQuery = `
         UPDATE users 
         SET 
@@ -46,18 +40,6 @@ router.post("/add", verifyToken, async (req, res) => {
         WHERE id::text = $1
       `;
       await db.query(ownerStatsQuery, [owner_id]);
-
-      // Update Property Stats (if property_id exists)
-      if (property_id) {
-        const propertyStatsQuery = `
-          UPDATE properties 
-          SET 
-            average_rating = (SELECT ROUND(AVG(rating)::numeric, 2) FROM reviews WHERE property_id::text = $1),
-            total_reviews = (SELECT COUNT(*)::int FROM reviews WHERE property_id::text = $1)
-          WHERE id::text = $1
-        `;
-        await db.query(propertyStatsQuery, [property_id]);
-      }
     } catch (updateError) {
       console.error(
         "⚠️ Review saved, but stats update failed:",
@@ -86,26 +68,14 @@ router.get("/owner/:ownerId", async (req, res) => {
     res.json(result.rows || []);
   } catch (error) {
     console.error("❌ Owner Review Error:", error.message);
-    res.status(200).json([]); // Prevent Flutter crash
+    res.status(200).json([]);
   }
 });
 
-// ======================= GET REVIEWS FOR PROPERTY =======================
+// ======================= GET REVIEWS FOR PROPERTY (Legacy/Empty) =======================
 router.get("/property/:propertyId", async (req, res) => {
-  try {
-    const query = `
-      SELECT r.*, u.full_name as seeker_name 
-      FROM reviews r
-      LEFT JOIN users u ON r.seeker_id::text = u.id::text
-      WHERE r.property_id::text = $1 
-      ORDER BY r.created_at DESC
-    `;
-    const result = await db.query(query, [req.params.propertyId]);
-    res.json(result.rows || []);
-  } catch (error) {
-    console.error("❌ Property Review Error:", error.message);
-    res.status(200).json([]); // Prevent Flutter crash
-  }
+  // Since reviews are owner-only, returning empty to avoid breaking Flutter UI
+  res.json([]);
 });
 
 module.exports = router;
