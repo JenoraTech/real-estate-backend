@@ -1,5 +1,5 @@
 const bcrypt = require("bcryptjs");
-const db = require("../config/db"); // Now uses the clean pg library
+const db = require("../config/db"); // Clean pg library pool
 const jwt = require("jsonwebtoken");
 
 /**
@@ -9,14 +9,15 @@ const jwt = require("jsonwebtoken");
 exports.getAllUsers = async (req, res) => {
   try {
     // The standard 'pg' library returns result.rows as a clean array
+    // Standardizing column names: ensure 'role' matches your DB schema (user_role or role)
     const result = await db.query(
-      "SELECT id, full_name, email, user_role, is_blocked FROM users ORDER BY created_at DESC",
+      "SELECT id, full_name, email, role, is_blocked, created_at FROM users ORDER BY created_at DESC",
     );
 
     console.log(`Fetched ${result.rows.length} users for Admin`);
     res.json(result.rows);
   } catch (err) {
-    console.error("FETCH USERS ERROR:", err.message);
+    console.error("❌ FETCH USERS ERROR:", err.message);
     res.status(500).json({ error: "Failed to fetch users: " + err.message });
   }
 };
@@ -30,8 +31,9 @@ exports.toggleUserBlock = async (req, res) => {
   const { is_blocked } = req.body;
 
   try {
+    // Adding ::text casting to ID for UUID compatibility
     const result = await db.query(
-      "UPDATE users SET is_blocked = $1 WHERE id = $2 RETURNING id, full_name, is_blocked",
+      "UPDATE users SET is_blocked = $1 WHERE id::text = $2 RETURNING id, full_name, is_blocked",
       [is_blocked, id],
     );
 
@@ -44,6 +46,7 @@ exports.toggleUserBlock = async (req, res) => {
       user: result.rows[0],
     });
   } catch (err) {
+    console.error("❌ TOGGLE BLOCK ERROR:", err.message);
     res.status(500).json({ error: "Update failed: " + err.message });
   }
 };
@@ -53,9 +56,9 @@ exports.toggleUserBlock = async (req, res) => {
  */
 exports.getAdminId = async (req, res) => {
   try {
+    // Using LOWER() and checking both common role column names
     const result = await db.query(
-      "SELECT id, full_name FROM users WHERE LOWER(user_role) = LOWER($1) LIMIT 1",
-      ["admin"],
+      "SELECT id, full_name FROM users WHERE LOWER(role) = 'admin' OR LOWER(role) = 'admin' LIMIT 1",
     );
 
     if (result.rows.length === 0) {
@@ -70,7 +73,7 @@ exports.getAdminId = async (req, res) => {
       admin_name: result.rows[0].full_name || "App Support",
     });
   } catch (error) {
-    console.error("Database Error:", error);
+    console.error("❌ GET ADMIN ID ERROR:", error.message);
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
@@ -87,9 +90,9 @@ exports.acceptTerms = async (req, res) => {
     }
 
     const query =
-      "UPDATE users SET has_accepted_terms = true WHERE id = $1 RETURNING *";
+      "UPDATE users SET has_accepted_terms = true WHERE id::text = $1 RETURNING id, has_accepted_terms";
 
-    const result = await db.query(query, [userId]);
+    const result = await db.query(query, [userId.toString()]);
 
     if (result.rowCount === 0) {
       return res.status(404).json({ message: "User not found" });
@@ -101,7 +104,7 @@ exports.acceptTerms = async (req, res) => {
       message: "Terms accepted successfully",
     });
   } catch (error) {
-    console.error("Database Error:", error);
+    console.error("❌ ACCEPT TERMS ERROR:", error.message);
     res.status(500).json({ error: "Internal server error" });
   }
 };

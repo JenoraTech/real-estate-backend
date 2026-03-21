@@ -1,10 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const db = require("../config/db"); // ✅ Uses the new PG Pool
-const { protect } = require("../middleware/auth");
+const { verifyToken } = require("../middleware/auth"); // Assuming you're using verifyToken from previous steps
 
 // ======================= POST A NEW REVIEW =======================
-router.post("/add", protect, async (req, res) => {
+router.post("/add", verifyToken, async (req, res) => {
   try {
     const { owner_id, property_id, rating, comment } = req.body;
 
@@ -15,9 +15,9 @@ router.post("/add", protect, async (req, res) => {
 
     const seeker_id = req.user.id;
 
-    // 1️⃣ Insert the Review
+    // 1️⃣ Insert the Review into "Reviews" (Case-Sensitive)
     const insertQuery = `
-      INSERT INTO reviews (seeker_id, owner_id, property_id, rating, comment, created_at)
+      INSERT INTO "Reviews" (seeker_id, owner_id, property_id, rating, comment, created_at)
       VALUES ($1, $2, $3, $4, $5, NOW())
       RETURNING *
     `;
@@ -36,9 +36,9 @@ router.post("/add", protect, async (req, res) => {
       const ownerStatsQuery = `
         UPDATE users 
         SET 
-          average_rating = (SELECT ROUND(AVG(rating), 2) FROM reviews WHERE owner_id = $1),
-          total_reviews = (SELECT COUNT(*) FROM reviews WHERE owner_id = $1)
-        WHERE id = $1
+          average_rating = (SELECT ROUND(AVG(rating)::numeric, 2) FROM "Reviews" WHERE owner_id::text = $1),
+          total_reviews = (SELECT COUNT(*)::int FROM "Reviews" WHERE owner_id::text = $1)
+        WHERE id::text = $1
       `;
       await db.query(ownerStatsQuery, [owner_id]);
 
@@ -47,9 +47,9 @@ router.post("/add", protect, async (req, res) => {
         const propertyStatsQuery = `
           UPDATE properties 
           SET 
-            average_rating = (SELECT ROUND(AVG(rating), 2) FROM reviews WHERE property_id = $1),
-            total_reviews = (SELECT COUNT(*) FROM reviews WHERE property_id = $1)
-          WHERE id = $1
+            average_rating = (SELECT ROUND(AVG(rating)::numeric, 2) FROM "Reviews" WHERE property_id::text = $1),
+            total_reviews = (SELECT COUNT(*)::int FROM "Reviews" WHERE property_id::text = $1)
+          WHERE id::text = $1
         `;
         await db.query(propertyStatsQuery, [property_id]);
       }
@@ -71,9 +71,11 @@ router.post("/add", protect, async (req, res) => {
 router.get("/owner/:ownerId", async (req, res) => {
   try {
     const query = `
-      SELECT * FROM reviews 
-      WHERE owner_id = $1 
-      ORDER BY created_at DESC
+      SELECT r.*, u.full_name as seeker_name 
+      FROM "Reviews" r
+      JOIN users u ON r.seeker_id::text = u.id::text
+      WHERE r.owner_id::text = $1 
+      ORDER BY r.created_at DESC
     `;
     const result = await db.query(query, [req.params.ownerId]);
     res.json(result.rows);
@@ -86,9 +88,11 @@ router.get("/owner/:ownerId", async (req, res) => {
 router.get("/property/:propertyId", async (req, res) => {
   try {
     const query = `
-      SELECT * FROM reviews 
-      WHERE property_id = $1 
-      ORDER BY created_at DESC
+      SELECT r.*, u.full_name as seeker_name 
+      FROM "Reviews" r
+      JOIN users u ON r.seeker_id::text = u.id::text
+      WHERE r.property_id::text = $1 
+      ORDER BY r.created_at DESC
     `;
     const result = await db.query(query, [req.params.propertyId]);
     res.json(result.rows);

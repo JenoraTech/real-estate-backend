@@ -46,9 +46,9 @@ exports.createUserAccount = async (req, res) => {
     // 4️⃣ Insert user
     const queryText = `
       INSERT INTO users 
-      (full_name, email, phone, password_hash, user_role, otp_code, otp_expiry, is_verified)
+      (full_name, email, phone, password_hash, role, otp_code, otp_expiry, is_verified)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      RETURNING id, full_name, email, phone, user_role, is_verified, created_at
+      RETURNING id, full_name, email, phone, role as user_role, is_verified, created_at
     `;
 
     const result = await db.query(queryText, [
@@ -150,7 +150,7 @@ exports.loginUser = async (req, res) => {
     if (!user.is_verified) {
       const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
       await db.query(
-        `UPDATE users SET otp_code = $1, otp_expiry = NOW() + INTERVAL '10 minutes' WHERE id = $2`,
+        `UPDATE users SET otp_code = $1, otp_expiry = NOW() + INTERVAL '10 minutes' WHERE id::text = $2`,
         [newOtp, user.id],
       );
 
@@ -182,7 +182,7 @@ exports.loginUser = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user.id, role: user.user_role },
+      { id: user.id, role: user.role || user.user_role },
       process.env.JWT_SECRET || "fallback",
       { expiresIn: "24h" },
     );
@@ -194,7 +194,7 @@ exports.loginUser = async (req, res) => {
         email: user.email,
         phone: user.phone,
         full_name: user.full_name,
-        user_role: user.user_role,
+        user_role: user.role || user.user_role,
         has_accepted_terms: user.has_accepted_terms,
         is_verified: user.is_verified,
       },
@@ -225,7 +225,7 @@ exports.sendVerificationOtp = async (req, res) => {
 
     const otp = crypto.randomInt(100000, 999999).toString();
     await db.query(
-      `UPDATE users SET otp_code = $1, otp_expiry = NOW() + INTERVAL '10 minutes' WHERE id = $2`,
+      `UPDATE users SET otp_code = $1, otp_expiry = NOW() + INTERVAL '10 minutes' WHERE id::text = $2`,
       [otp, user.id],
     );
 
@@ -267,12 +267,12 @@ exports.verifyOtp = async (req, res) => {
       return res.status(400).json({ message: "Invalid or expired OTP code." });
 
     await db.query(
-      `UPDATE users SET is_verified = true, otp_code = NULL, otp_expiry = NULL WHERE id = $1`,
+      `UPDATE users SET is_verified = true, otp_code = NULL, otp_expiry = NULL WHERE id::text = $1`,
       [user.id],
     );
 
     const token = jwt.sign(
-      { id: user.id, role: user.user_role },
+      { id: user.id, role: user.role || user.user_role },
       process.env.JWT_SECRET || "fallback",
       { expiresIn: "24h" },
     );
@@ -306,7 +306,7 @@ exports.forgotPassword = async (req, res) => {
     const expiry = new Date(Date.now() + 15 * 60000);
 
     await db.query(
-      `UPDATE users SET reset_token = $1, reset_token_expiry = $2 WHERE id = $3`,
+      `UPDATE users SET reset_token = $1, reset_token_expiry = $2 WHERE id::text = $3`,
       [otpCode, expiry, user.id],
     );
 
@@ -343,7 +343,7 @@ exports.resetPassword = async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, salt);
 
     await db.query(
-      `UPDATE users SET password_hash = $1, reset_token = NULL, reset_token_expiry = NULL, is_verified = true WHERE id = $2`,
+      `UPDATE users SET password_hash = $1, reset_token = NULL, reset_token_expiry = NULL, is_verified = true WHERE id::text = $2`,
       [hashedPassword, user.id],
     );
 

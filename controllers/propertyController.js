@@ -157,13 +157,13 @@ exports.getAllProperties = async (req, res) => {
           owner_id::text AS owner_id,
           COALESCE(ROUND(AVG(rating)::numeric, 1), 0.0) AS avg_rating,
           COUNT(*)::int AS total_reviews
-        FROM reviews
+        FROM "Reviews"  -- ✅ Fixed: Wrapped in quotes for case-sensitivity
         GROUP BY owner_id::text
-      ) r ON r.owner_id = p.owner_id::text
+      ) r ON r.owner_id::text = p.owner_id::text
       LEFT JOIN LATERAL (
         SELECT image_url
         FROM property_images
-        WHERE property_id::text = p.id::text
+        WHERE property_id::text = p.id::text -- ✅ Safety: Cast to text for matching
         LIMIT 1
       ) pi ON true
       WHERE (u.is_blocked = false OR u.is_blocked IS NULL)
@@ -172,19 +172,25 @@ exports.getAllProperties = async (req, res) => {
 
     const result = await db.query(queryText);
 
+    // Map through results to append the BASE_URL to the thumbnail path
     result.rows.forEach((p) => {
-      if (p.thumbnail) p.thumbnail = `${BASE_URL}${p.thumbnail}`;
+      if (p.thumbnail) {
+        // Ensure we don't double-append if path already contains BASE_URL
+        if (!p.thumbnail.startsWith("http")) {
+          p.thumbnail = `${BASE_URL}${p.thumbnail}`;
+        }
+      }
     });
 
     res.json(result.rows);
   } catch (err) {
     console.error("❌ DATABASE CRASH DETAILS:", err.message);
-    res
-      .status(500)
-      .json({ error: "Internal Server Error", details: err.message });
+    res.status(500).json({
+      error: "Internal Server Error",
+      details: err.message,
+    });
   }
 };
-
 // ======================= SEARCH PROPERTIES =======================
 exports.searchProperties = async (req, res) => {
   try {
@@ -545,25 +551,55 @@ exports.getUserWaitlist = async (req, res) => {
 exports.getPropertyById = async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await db.query(
-      `SELECT p.*, u.full_name AS owner_name, u.phone AS owner_phone, u.email AS owner_email,
-              (SELECT array_agg(image_url) FROM property_images WHERE property_id = p.id) as image_urls
-       FROM properties p JOIN users u ON p.owner_id = u.id WHERE p.id = $1`,
-      [id],
-    );
-    if (result.rows.length === 0)
+
+    // We use ::text casting on IDs to ensure UUIDs and Strings match correctly
+    // We wrap "Reviews" in double quotes for case-sensitivity
+    const queryText = `
+      SELECT 
+        p.*, 
+        u.full_name AS owner_name, 
+        u.phone AS owner_phone, 
+        u.email AS owner_email,
+        (
+          SELECT array_agg(image_url) 
+          FROM property_images 
+          WHERE property_id::text = p.id::text
+        ) as image_urls,
+        (
+          SELECT COALESCE(ROUND(AVG(rating)::numeric, 1), 0.0) 
+          FROM "Reviews" 
+          WHERE property_id::text = p.id::text
+        ) as average_rating
+      FROM properties p 
+      JOIN users u ON p.owner_id::text = u.id::text 
+      WHERE p.id::text = $1
+    `;
+
+    const result = await db.query(queryText, [id]);
+
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: "Property not found" });
+    }
+
     const property = result.rows[0];
-    if (property.image_urls)
-      property.image_urls = property.image_urls.map(
-        (url) => `${BASE_URL}${url}`,
-      );
+
+    // Clean up image URLs to ensure they have the full backend path
+    if (property.image_urls) {
+      property.image_urls = property.image_urls.map((url) => {
+        if (url.startsWith("http")) return url; // Already a full URL
+        return `${BASE_URL}${url.replace(/\\/g, "/")}`; // Convert backslashes for web safety
+      });
+    }
+
     res.json(property);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("❌ GET PROPERTY BY ID ERROR:", err.message);
+    res.status(500).json({
+      error: "Internal Server Error",
+      details: err.message,
+    });
   }
 };
-
 exports.getPaidCommissions = async (req, res) => {
   try {
     const result = await db.query(

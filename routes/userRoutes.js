@@ -3,34 +3,33 @@ const router = express.Router();
 const userController = require("../controllers/userController");
 const db = require("../config/db");
 
-// ✅ Destructure the functions from your updated auth middleware
-// This prevents the "argument handler must be a function" crash.
+// ✅ Using the destructured auth middleware
 const { verifyToken, isAdmin } = require("../middleware/auth");
 
 /**
  * @route   GET /api/users
  * @desc    Fetch all users for the Admin Dashboard
- * @access  Private (Admin)
  */
-// ✅ Changed authMiddleware to verifyToken and added isAdmin for security
 router.get("/", verifyToken, isAdmin, userController.getAllUsers);
 
-// ✅ UPDATED: Changed 'protect' to 'verifyToken' to match your import above
+/**
+ * @route   POST /api/users/accept-terms
+ */
 router.post("/accept-terms", verifyToken, userController.acceptTerms);
 
 /**
  * @route   PATCH /api/users/:id/block
- * @desc    Admin Manual Block/Unblock
- * @access  Private (Admin)
  */
-// ✅ Updated to use the correct middleware functions
 router.patch(
   "/:id/block",
   verifyToken,
   isAdmin,
   userController.toggleUserBlock,
 );
-// Get the UUID of the admin user so seekers can contact them
+
+/**
+ * @route   GET /api/users/admin-id
+ */
 router.get("/admin-id", userController.getAdminId);
 
 /**
@@ -38,36 +37,40 @@ router.get("/admin-id", userController.getAdminId);
  * @desc    Get specific user profile (Used for Property Owner Contact)
  * @access  Public
  */
-router.get("/:id", (req, res) => {
+router.get("/:id", async (req, res) => {
   const userId = req.params.id;
 
-  // We select fields that match your Flutter UserModel.fromJson factory exactly.
+  // ✅ Updated to PostgreSQL $1 syntax and added ::text casting
   const query = `
     SELECT 
       id, 
-      username AS name, 
+      full_name AS name, 
       email, 
       role, 
-      phone_number AS phoneNumber, 
-      profile_pic AS profilePic, 
-      isOnline, 
-      last_seen AS lastSeen 
+      phone AS "phoneNumber", 
+      profile_pic AS "profilePic", 
+      is_online AS "isOnline", 
+      last_seen AS "lastSeen" 
     FROM users 
-    WHERE id = ?
+    WHERE id::text = $1
   `;
 
-  db.query(query, [userId], (err, result) => {
-    if (err) {
-      console.error("Database Error:", err);
-      return res.status(500).json({ error: "Internal server error" });
-    }
+  try {
+    // ✅ Changed from callback to await to match your PG Pool config
+    const result = await db.query(query, [userId]);
 
-    if (result.length === 0) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    res.json(result[0]);
-  });
+    // result.rows[0] contains the data in PG
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("❌ Database Error in getUserById:", err.message);
+    res
+      .status(500)
+      .json({ error: "Internal server error", details: err.message });
+  }
 });
 
 module.exports = router;
