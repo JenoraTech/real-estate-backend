@@ -8,10 +8,13 @@ const jwt = require("jsonwebtoken");
  */
 exports.getAllUsers = async (req, res) => {
   try {
-    // The standard 'pg' library returns result.rows as a clean array
-    // Standardizing column names: ensure 'role' matches your DB schema (user_role or role)
+    // Corrected to user_role and added 'AS role' for Flutter compatibility
     const result = await db.query(
-      "SELECT id, full_name, email, role, is_blocked, created_at FROM users ORDER BY created_at DESC",
+      `SELECT id, full_name, email, 
+              user_role AS role, 
+              is_blocked, created_at 
+       FROM users 
+       ORDER BY created_at DESC`,
     );
 
     console.log(`Fetched ${result.rows.length} users for Admin`);
@@ -31,7 +34,7 @@ exports.toggleUserBlock = async (req, res) => {
   const { is_blocked } = req.body;
 
   try {
-    // Adding ::text casting to ID for UUID compatibility
+    // ::text casting for UUID compatibility
     const result = await db.query(
       "UPDATE users SET is_blocked = $1 WHERE id::text = $2 RETURNING id, full_name, is_blocked",
       [is_blocked, id],
@@ -56,9 +59,9 @@ exports.toggleUserBlock = async (req, res) => {
  */
 exports.getAdminId = async (req, res) => {
   try {
-    // Using LOWER() and checking both common role column names
+    // Corrected query to use user_role
     const result = await db.query(
-      "SELECT id, full_name FROM users WHERE LOWER(role) = 'admin' OR LOWER(role) = 'admin' LIMIT 1",
+      "SELECT id, full_name FROM users WHERE LOWER(user_role) = 'admin' LIMIT 1",
     );
 
     if (result.rows.length === 0) {
