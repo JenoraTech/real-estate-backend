@@ -6,15 +6,23 @@ const jwt = require("jsonwebtoken");
 // This ensures that 'db.query' and 'pool.query' calls work with Sequelize.
 const db = {
   query: async (text, params) => {
-    // Sequelize returns [results, metadata]. We return results in a 'rows' object
-    // to match your existing code's 'result.rows' logic.
-    const [results] = await dbConfig.sequelize.query(text, {
-      bind: params,
-      type: dbConfig.sequelize.QueryTypes.SELECT,
+    // Determine if it's a SELECT or an UPDATE/INSERT
+    const isSelect = text.trim().toUpperCase().startsWith("SELECT");
+
+    const [results, metadata] = await dbConfig.sequelize.query(text, {
+      bind: params || [],
+      type: isSelect
+        ? dbConfig.sequelize.QueryTypes.SELECT
+        : dbConfig.sequelize.QueryTypes.RAW,
     });
+
+    // We normalize the response to match the 'pg' library format (result.rows)
+    // so the rest of your functioning code doesn't need to change.
+    const rows = Array.isArray(results) ? results : results?.rows || [results];
+
     return {
-      rows: results || [],
-      rowCount: results ? results.length : 0,
+      rows: rows || [],
+      rowCount: Array.isArray(rows) ? rows.length : metadata?.rowCount || 0,
     };
   },
 };
