@@ -6,7 +6,7 @@ const { verifyToken } = require("../middleware/auth");
 // ======================= POST A NEW REVIEW =======================
 router.post("/add", verifyToken, async (req, res) => {
   try {
-    const { owner_id, property_id, rating, comment } = req.body;
+    let { owner_id, property_id, rating, comment } = req.body;
 
     if (!req.user || !req.user.id) {
       return res.status(401).json({ error: "Unauthorized: User ID not found" });
@@ -14,16 +14,19 @@ router.post("/add", verifyToken, async (req, res) => {
 
     const seeker_id = req.user.id;
 
-    // Use lowercase 'reviews' or match exactly what Supabase shows
-    // We remove the double quotes to let the DB handle case-sensitivity normally
+    // Handle empty property_id from frontend to prevent UUID casting errors
+    if (!property_id || property_id === "" || property_id === "null") {
+      property_id = null;
+    }
+
     const insertQuery = `
       INSERT INTO Reviews (seeker_id, owner_id, property_id, rating, comment, created_at)
       VALUES ($1, $2, $3, $4, $5, NOW())
       RETURNING *
     `;
     const reviewResult = await db.query(insertQuery, [
-      seeker_id,
-      owner_id,
+      seeker_id.toString(),
+      owner_id.toString(),
       property_id,
       rating,
       comment,
@@ -32,6 +35,7 @@ router.post("/add", verifyToken, async (req, res) => {
 
     // 2️⃣ Recalculate and Update Stats
     try {
+      // Update User table
       const ownerStatsQuery = `
         UPDATE users 
         SET 
@@ -41,6 +45,7 @@ router.post("/add", verifyToken, async (req, res) => {
       `;
       await db.query(ownerStatsQuery, [owner_id]);
 
+      // Update Property table - FIXED: Using 'id' instead of 'property_id'
       if (property_id) {
         const propertyStatsQuery = `
           UPDATE properties 
@@ -65,7 +70,6 @@ router.post("/add", verifyToken, async (req, res) => {
 // ======================= GET REVIEWS FOR OWNER =======================
 router.get("/owner/:ownerId", async (req, res) => {
   try {
-    // Join logic: casting both to text to ensure the varchar vs uuid mismatch doesn't break
     const query = `
       SELECT r.*, u.full_name as seeker_name 
       FROM Reviews r
@@ -77,7 +81,7 @@ router.get("/owner/:ownerId", async (req, res) => {
     res.json(result.rows || []);
   } catch (error) {
     console.error("❌ Owner Review Error:", error.message);
-    res.status(200).json([]); // Return empty array so Flutter doesn't see a 500
+    res.status(200).json([]);
   }
 });
 
@@ -95,7 +99,7 @@ router.get("/property/:propertyId", async (req, res) => {
     res.json(result.rows || []);
   } catch (error) {
     console.error("❌ Property Review Error:", error.message);
-    res.status(200).json([]); // Return empty array so Flutter doesn't see a 500
+    res.status(200).json([]);
   }
 });
 
