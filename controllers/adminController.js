@@ -32,17 +32,34 @@ exports.getPendingProperties = async (req, res) => {
        ORDER BY created_at DESC`,
     );
 
-    // ✅ UPDATED: Using your Render URL instead of the local IP for images
     const BASE_URL = "https://real-estate-backend-4kfq.onrender.com/";
-    const properties = result.rows.map((prop) => ({
-      ...prop,
-      image_urls: prop.image_urls
-        ? prop.image_urls.map((url) => {
-            // If the URL is already absolute, don't prepend the BASE_URL
-            return url.startsWith("http") ? url : `${BASE_URL}${url}`;
-          })
-        : [],
-    }));
+
+    // ✅ ADDED SAFETY CHECK: Filter out nulls and handle missing image_urls
+    if (!result.rows || result.rows.length === 0) {
+      return res.status(200).json([]);
+    }
+
+    const properties = result.rows.map((prop) => {
+      // Create a clean copy of the property
+      const cleanProp = { ...prop };
+
+      // Safety: Check if image_urls exists and is an array
+      if (cleanProp.image_urls && Array.isArray(cleanProp.image_urls)) {
+        cleanProp.image_urls = cleanProp.image_urls.map((url) => {
+          if (!url) return "";
+          return url.startsWith("http") ? url : `${BASE_URL}${url}`;
+        });
+      } else {
+        cleanProp.image_urls = [];
+      }
+
+      // Safety: Also check the thumbnail
+      if (cleanProp.thumbnail && !cleanProp.thumbnail.startsWith("http")) {
+        cleanProp.thumbnail = `${BASE_URL}${cleanProp.thumbnail}`;
+      }
+
+      return cleanProp;
+    });
 
     res.status(200).json(properties);
   } catch (err) {
@@ -116,9 +133,9 @@ exports.getAdminStats = async (req, res) => {
     );
 
     res.status(200).json({
-      totalUsers: parseInt(userCount.rows[0].count),
-      totalProperties: parseInt(propertyCount.rows[0].count),
-      pendingApprovals: parseInt(pendingCount.rows[0].count),
+      totalUsers: parseInt(userCount.rows[0].count || 0),
+      totalProperties: parseInt(propertyCount.rows[0].count || 0),
+      pendingApprovals: parseInt(pendingCount.rows[0].count || 0),
       estimatedRevenue: totalRevenue.rows[0].sum || 0,
     });
   } catch (err) {
