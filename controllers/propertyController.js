@@ -151,19 +151,19 @@ exports.getAllProperties = async (req, res) => {
         COALESCE(r.total_reviews, 0) AS total_reviews,
         pi.image_url AS thumbnail
       FROM properties p
-      LEFT JOIN users u ON p.owner_id = u.id
+      LEFT JOIN users u ON p.owner_id::text = u.id::text
       LEFT JOIN (
         SELECT 
           owner_id::text AS owner_id,
           COALESCE(ROUND(AVG(rating)::numeric, 1), 0.0) AS avg_rating,
           COUNT(*)::int AS total_reviews
-        FROM "Reviews"  -- ✅ Fixed: Wrapped in quotes for case-sensitivity
+        FROM "Reviews" 
         GROUP BY owner_id::text
       ) r ON r.owner_id::text = p.owner_id::text
       LEFT JOIN LATERAL (
         SELECT image_url
         FROM property_images
-        WHERE property_id::text = p.id::text -- ✅ Safety: Cast to text for matching
+        WHERE property_id::text = p.id::text 
         LIMIT 1
       ) pi ON true
       WHERE (u.is_blocked = false OR u.is_blocked IS NULL)
@@ -172,10 +172,8 @@ exports.getAllProperties = async (req, res) => {
 
     const result = await db.query(queryText);
 
-    // Map through results to append the BASE_URL to the thumbnail path
     result.rows.forEach((p) => {
       if (p.thumbnail) {
-        // Ensure we don't double-append if path already contains BASE_URL
         if (!p.thumbnail.startsWith("http")) {
           p.thumbnail = `${BASE_URL}${p.thumbnail}`;
         }
@@ -191,15 +189,16 @@ exports.getAllProperties = async (req, res) => {
     });
   }
 };
+
 // ======================= SEARCH PROPERTIES =======================
 exports.searchProperties = async (req, res) => {
   try {
     const { location, category, minPrice, maxPrice } = req.query;
     let query = `
       SELECT p.*, u.full_name AS owner_name,
-      (SELECT image_url FROM property_images WHERE property_id = p.id LIMIT 1) as thumbnail
+      (SELECT image_url FROM property_images WHERE property_id::text = p.id::text LIMIT 1) as thumbnail
       FROM properties p
-      JOIN users u ON p.owner_id = u.id
+      JOIN users u ON p.owner_id::text = u.id::text
       WHERE (u.is_blocked = false OR u.is_blocked IS NULL)
     `;
     const params = [];
@@ -240,10 +239,10 @@ exports.getPropertiesByOwner = async (req, res) => {
     const { owner_id } = req.params;
     const queryText = `
       SELECT p.*, 
-      (SELECT image_url FROM property_images WHERE property_id = p.id LIMIT 1) as thumbnail,
-      (SELECT array_agg(image_url) FROM property_images WHERE property_id = p.id) as image_urls
+      (SELECT image_url FROM property_images WHERE property_id::text = p.id::text LIMIT 1) as thumbnail,
+      (SELECT array_agg(image_url) FROM property_images WHERE property_id::text = p.id::text) as image_urls
       FROM properties p 
-      WHERE p.owner_id = $1
+      WHERE p.owner_id::text = $1
       ORDER BY p.created_at DESC
     `;
     const result = await db.query(queryText, [owner_id]);
@@ -281,7 +280,7 @@ exports.updateProperty = async (req, res) => {
     await client.query("BEGIN");
 
     const propertyCheck = await client.query(
-      "SELECT * FROM properties WHERE id = $1 AND owner_id = $2",
+      "SELECT * FROM properties WHERE id::text = $1 AND owner_id::text = $2",
       [id, ownerId],
     );
 
@@ -313,7 +312,7 @@ exports.updateProperty = async (req, res) => {
     let finalImages = currentProperty.image_urls;
     if (req.files && req.files.length > 0) {
       const oldImages = await client.query(
-        "SELECT image_url FROM property_images WHERE property_id = $1",
+        "SELECT image_url FROM property_images WHERE property_id::text = $1",
         [id],
       );
       for (const row of oldImages.rows) {
@@ -324,9 +323,10 @@ exports.updateProperty = async (req, res) => {
           } catch (e) {}
         }
       }
-      await client.query("DELETE FROM property_images WHERE property_id = $1", [
-        id,
-      ]);
+      await client.query(
+        "DELETE FROM property_images WHERE property_id::text = $1",
+        [id],
+      );
       const newPaths = req.files.map((file) => file.path.replace(/\\/g, "/"));
       finalImages = `{${newPaths.map((p) => `"${p}"`).join(",")}}`;
       for (const pathStr of newPaths) {
@@ -346,7 +346,7 @@ exports.updateProperty = async (req, res) => {
            street = COALESCE($9, street), landmark = COALESCE($10, landmark),
            address = COALESCE($11, address), image_urls = COALESCE($12, image_urls),
            updated_at = NOW()
-       WHERE id = $13 AND owner_id = $14
+       WHERE id::text = $13 AND owner_id::text = $14
        RETURNING *`,
       [
         title || null,
@@ -369,7 +369,7 @@ exports.updateProperty = async (req, res) => {
     if (cleanPrice) {
       const newCommission = parseFloat(cleanPrice) * 0.025;
       await client.query(
-        `UPDATE property_commissions SET total_rent_price = $1, commission_due = $2 WHERE property_id = $3`,
+        `UPDATE property_commissions SET total_rent_price = $1, commission_due = $2 WHERE property_id::text = $3`,
         [cleanPrice, newCommission, id],
       );
     }
@@ -399,7 +399,7 @@ exports.deleteProperty = async (req, res) => {
 
   try {
     const propertyCheck = await db.query(
-      "SELECT * FROM properties WHERE id = $1",
+      "SELECT * FROM properties WHERE id::text = $1",
       [id],
     );
     if (propertyCheck.rows.length === 0)
@@ -412,7 +412,7 @@ exports.deleteProperty = async (req, res) => {
     }
 
     const imageQuery = await db.query(
-      "SELECT image_url FROM property_images WHERE property_id = $1",
+      "SELECT image_url FROM property_images WHERE property_id::text = $1",
       [id],
     );
     imageQuery.rows.forEach((row) => {
@@ -420,11 +420,14 @@ exports.deleteProperty = async (req, res) => {
       if (fs.existsSync(filePath)) fs.unlink(filePath, () => {});
     });
 
-    await db.query("DELETE FROM property_images WHERE property_id = $1", [id]);
-    await db.query("DELETE FROM property_commissions WHERE property_id = $1", [
+    await db.query("DELETE FROM property_images WHERE property_id::text = $1", [
       id,
     ]);
-    await db.query("DELETE FROM properties WHERE id = $1", [id]);
+    await db.query(
+      "DELETE FROM property_commissions WHERE property_id::text = $1",
+      [id],
+    );
+    await db.query("DELETE FROM properties WHERE id::text = $1", [id]);
 
     res
       .status(200)
@@ -440,7 +443,7 @@ exports.toggleVisibility = async (req, res) => {
   const { is_hidden } = req.body;
   try {
     const result = await db.query(
-      "UPDATE properties SET is_hidden = $1 WHERE id = $2 RETURNING is_hidden",
+      "UPDATE properties SET is_hidden = $1 WHERE id::text = $2 RETURNING is_hidden",
       [is_hidden, id],
     );
     if (result.rows.length === 0)
@@ -459,7 +462,9 @@ exports.getAdminLeads = async (req, res) => {
     const result = await db.query(`
       SELECT w.id AS lead_id, u.full_name AS seeker_name, u.phone AS seeker_phone, u.email AS seeker_email,
              p.title AS property_title, w.created_at
-      FROM waitlist w JOIN users u ON w.user_id = u.id JOIN properties p ON w.property_id = p.id
+      FROM waitlist w 
+      JOIN users u ON w.user_id::text = u.id::text 
+      JOIN properties p ON w.property_id::text = p.id::text
       ORDER BY w.created_at DESC`);
     res.status(200).json(result.rows);
   } catch (error) {
@@ -472,7 +477,7 @@ exports.addToWaitlist = async (req, res) => {
     const { property_id } = req.body;
     const user_id = req.user.id;
     const existing = await db.query(
-      "SELECT * FROM waitlist WHERE user_id = $1 AND property_id = $2",
+      "SELECT * FROM waitlist WHERE user_id::text = $1 AND property_id::text = $2",
       [user_id, property_id],
     );
     if (existing.rows.length > 0)
@@ -492,7 +497,7 @@ exports.removeFromWaitlist = async (req, res) => {
     const { property_id } = req.params;
     const user_id = req.user.id;
     await db.query(
-      "DELETE FROM waitlist WHERE user_id = $1 AND property_id = $2",
+      "DELETE FROM waitlist WHERE user_id::text = $1 AND property_id::text = $2",
       [user_id, property_id],
     );
     res.json({ message: "Removed from waitlist" });
@@ -521,8 +526,8 @@ exports.getViewed = async (req, res) => {
     const result = await db.query(
       `
       SELECT p.* FROM property_views pv 
-      JOIN properties p ON pv.property_id = p.id 
-      WHERE pv.user_id = $1 
+      JOIN properties p ON pv.property_id::text = p.id::text 
+      WHERE pv.user_id::text = $1 
       ORDER BY pv.viewed_at DESC`,
       [user_id],
     );
@@ -538,8 +543,8 @@ exports.getUserWaitlist = async (req, res) => {
     const result = await db.query(
       `
       SELECT p.* FROM waitlist w 
-      JOIN properties p ON w.property_id = p.id 
-      WHERE w.user_id = $1`,
+      JOIN properties p ON w.property_id::text = p.id::text 
+      WHERE w.user_id::text = $1`,
       [user_id],
     );
     res.json(result.rows);
@@ -552,14 +557,13 @@ exports.getPropertyById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // We use ::text casting on IDs to ensure UUIDs and Strings match correctly
-    // We wrap "Reviews" in double quotes for case-sensitivity
     const queryText = `
       SELECT 
         p.*, 
         u.full_name AS owner_name, 
         u.phone AS owner_phone, 
         u.email AS owner_email,
+        u.user_role AS owner_role,
         (
           SELECT array_agg(image_url) 
           FROM property_images 
@@ -583,11 +587,10 @@ exports.getPropertyById = async (req, res) => {
 
     const property = result.rows[0];
 
-    // Clean up image URLs to ensure they have the full backend path
     if (property.image_urls) {
       property.image_urls = property.image_urls.map((url) => {
-        if (url.startsWith("http")) return url; // Already a full URL
-        return `${BASE_URL}${url.replace(/\\/g, "/")}`; // Convert backslashes for web safety
+        if (url.startsWith("http")) return url;
+        return `${BASE_URL}${url.replace(/\\/g, "/")}`;
       });
     }
 
@@ -600,6 +603,7 @@ exports.getPropertyById = async (req, res) => {
     });
   }
 };
+
 exports.getPaidCommissions = async (req, res) => {
   try {
     const result = await db.query(
@@ -626,7 +630,7 @@ exports.getInquiriesByOwner = async (req, res) => {
   try {
     const { owner_id } = req.params;
     const result = await db.query(
-      "SELECT * FROM inquiries WHERE owner_id = $1 ORDER BY created_at DESC",
+      "SELECT * FROM inquiries WHERE owner_id::text = $1 ORDER BY created_at DESC",
       [owner_id],
     );
     res.json(result.rows);
@@ -654,7 +658,7 @@ exports.updateCommissionStatus = async (req, res) => {
   const { status } = req.body;
   try {
     const result = await db.query(
-      "UPDATE property_commissions SET status = $1 WHERE id = $2 RETURNING *",
+      "UPDATE property_commissions SET status = $1 WHERE id::text = $2 RETURNING *",
       [status, id],
     );
     res.json(result.rows[0]);
