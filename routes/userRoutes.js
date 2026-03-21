@@ -46,7 +46,7 @@ router.get("/:id", async (req, res) => {
       id, 
       full_name AS name, 
       email, 
-      role, 
+      user_role, 
       phone AS "phoneNumber", 
       profile_pic AS "profilePic", 
       is_online AS "isOnline", 
