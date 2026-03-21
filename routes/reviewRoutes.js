@@ -8,19 +8,21 @@ router.post("/add", verifyToken, async (req, res) => {
   try {
     let { owner_id, property_id, rating, comment } = req.body;
 
+    // Safety check for user from middleware
     if (!req.user || !req.user.id) {
       return res.status(401).json({ error: "Unauthorized: User ID not found" });
     }
 
     const seeker_id = req.user.id;
 
-    // Handle empty property_id from frontend to prevent UUID casting errors
+    // Normalize property_id to handle empty strings from Flutter
     if (!property_id || property_id === "" || property_id === "null") {
       property_id = null;
     }
 
+    // 1️⃣ Insert the Review into "reviews" (Standard Lowercase)
     const insertQuery = `
-      INSERT INTO Reviews (seeker_id, owner_id, property_id, rating, comment, created_at)
+      INSERT INTO reviews (seeker_id, owner_id, property_id, rating, comment, created_at)
       VALUES ($1, $2, $3, $4, $5, NOW())
       RETURNING *
     `;
@@ -33,31 +35,34 @@ router.post("/add", verifyToken, async (req, res) => {
     ]);
     const newReview = reviewResult.rows[0];
 
-    // 2️⃣ Recalculate and Update Stats
+    // 2️⃣ Recalculate and Update Owner/Property Stats
     try {
-      // Update User table
+      // Update Owner Stats
       const ownerStatsQuery = `
         UPDATE users 
         SET 
-          average_rating = (SELECT ROUND(AVG(rating)::numeric, 2) FROM Reviews WHERE owner_id::text = $1),
-          total_reviews = (SELECT COUNT(*)::int FROM Reviews WHERE owner_id::text = $1)
+          average_rating = (SELECT ROUND(AVG(rating)::numeric, 2) FROM reviews WHERE owner_id::text = $1),
+          total_reviews = (SELECT COUNT(*)::int FROM reviews WHERE owner_id::text = $1)
         WHERE id::text = $1
       `;
       await db.query(ownerStatsQuery, [owner_id]);
 
-      // Update Property table - FIXED: Using 'id' instead of 'property_id'
+      // Update Property Stats (if property_id exists)
       if (property_id) {
         const propertyStatsQuery = `
           UPDATE properties 
           SET 
-            average_rating = (SELECT ROUND(AVG(rating)::numeric, 2) FROM Reviews WHERE property_id::text = $1),
-            total_reviews = (SELECT COUNT(*)::int FROM Reviews WHERE property_id::text = $1)
+            average_rating = (SELECT ROUND(AVG(rating)::numeric, 2) FROM reviews WHERE property_id::text = $1),
+            total_reviews = (SELECT COUNT(*)::int FROM reviews WHERE property_id::text = $1)
           WHERE id::text = $1
         `;
         await db.query(propertyStatsQuery, [property_id]);
       }
     } catch (updateError) {
-      console.error("⚠️ Stats update failed:", updateError.message);
+      console.error(
+        "⚠️ Review saved, but stats update failed:",
+        updateError.message,
+      );
     }
 
     res.status(201).json(newReview);
@@ -72,7 +77,7 @@ router.get("/owner/:ownerId", async (req, res) => {
   try {
     const query = `
       SELECT r.*, u.full_name as seeker_name 
-      FROM Reviews r
+      FROM reviews r
       LEFT JOIN users u ON r.seeker_id::text = u.id::text
       WHERE r.owner_id::text = $1 
       ORDER BY r.created_at DESC
@@ -81,7 +86,7 @@ router.get("/owner/:ownerId", async (req, res) => {
     res.json(result.rows || []);
   } catch (error) {
     console.error("❌ Owner Review Error:", error.message);
-    res.status(200).json([]);
+    res.status(200).json([]); // Prevent Flutter crash
   }
 });
 
@@ -90,7 +95,7 @@ router.get("/property/:propertyId", async (req, res) => {
   try {
     const query = `
       SELECT r.*, u.full_name as seeker_name 
-      FROM Reviews r
+      FROM reviews r
       LEFT JOIN users u ON r.seeker_id::text = u.id::text
       WHERE r.property_id::text = $1 
       ORDER BY r.created_at DESC
@@ -99,7 +104,7 @@ router.get("/property/:propertyId", async (req, res) => {
     res.json(result.rows || []);
   } catch (error) {
     console.error("❌ Property Review Error:", error.message);
-    res.status(200).json([]);
+    res.status(200).json([]); // Prevent Flutter crash
   }
 });
 
