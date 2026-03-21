@@ -20,38 +20,56 @@ const path = require("path");
  */
 const db = {
   query: async (text, params) => {
-    // 1. Try direct query (Pool/Client)
+    // 1. Try direct query (pg pool)
     if (typeof dbConfig.query === "function") {
       return await dbConfig.query(text, params);
     }
-    // 2. Try Sequelize raw query (common in Render/Sequelize setups)
+
+    // 2. Sequelize raw query
     if (dbConfig.sequelize) {
-      const [results] = await dbConfig.sequelize.query(text, {
+      const isSelect = text.trim().toUpperCase().startsWith("SELECT");
+
+      const results = await dbConfig.sequelize.query(text, {
         bind: params || [],
-        type: dbConfig.sequelize.QueryTypes.SELECT,
+        type: isSelect
+          ? dbConfig.sequelize.QueryTypes.SELECT
+          : dbConfig.sequelize.QueryTypes.RAW,
       });
+
+      let rows = [];
+
+      if (isSelect) {
+        rows = results; // ✅ already array
+      } else {
+        rows = results?.rows || [];
+      }
+
       return {
-        rows: Array.isArray(results) ? results : [results],
-        rowCount: Array.isArray(results) ? results.length : 1,
+        rows,
+        rowCount: rows.length,
       };
     }
-    throw new Error(
-      "Database connection error: .query() not found on db import.",
-    );
+
+    throw new Error("Database connection error: .query() not found.");
   },
+
   connect: async () => {
-    // Required for your transaction logic in updateProperty
     const connection = dbConfig.sequelize || dbConfig;
+
     return {
       query: async (text, params) => {
-        const [results] = await connection.query(text, { bind: params || [] });
-        return { rows: Array.isArray(results) ? results : [results] };
+        const results = await connection.query(text, {
+          bind: params || [],
+        });
+
+        return {
+          rows: Array.isArray(results) ? results : [],
+        };
       },
-      release: () => {}, // Mock release for sequelize
+      release: () => {},
     };
   },
 };
-
 // ======================= CREATE PROPERTY =======================
 exports.createProperty = async (req, res) => {
   const {
