@@ -1,5 +1,5 @@
 const BASE_URL = "https://real-estate-backend-4kfq.onrender.com/";
-const db = require("../config/db"); // Now uses the clean pg library directly
+const db = require("../config/db");
 const fs = require("fs");
 const path = require("path");
 
@@ -157,7 +157,7 @@ exports.getAllProperties = async (req, res) => {
           owner_id::text AS owner_id,
           COALESCE(ROUND(AVG(rating)::numeric, 1), 0.0) AS avg_rating,
           COUNT(*)::int AS total_reviews
-        FROM "Reviews"
+        FROM reviews
         GROUP BY owner_id::text
       ) r ON r.owner_id = p.owner_id::text
       LEFT JOIN LATERAL (
@@ -182,6 +182,49 @@ exports.getAllProperties = async (req, res) => {
     res
       .status(500)
       .json({ error: "Internal Server Error", details: err.message });
+  }
+};
+
+// ======================= SEARCH PROPERTIES =======================
+exports.searchProperties = async (req, res) => {
+  try {
+    const { location, category, minPrice, maxPrice } = req.query;
+    let query = `
+      SELECT p.*, u.full_name AS owner_name,
+      (SELECT image_url FROM property_images WHERE property_id = p.id LIMIT 1) as thumbnail
+      FROM properties p
+      JOIN users u ON p.owner_id = u.id
+      WHERE (u.is_blocked = false OR u.is_blocked IS NULL)
+    `;
+    const params = [];
+
+    if (location) {
+      params.push(`%${location}%`);
+      query += ` AND (p.location ILIKE $${params.length} OR p.city ILIKE $${params.length} OR p.state ILIKE $${params.length})`;
+    }
+    if (category) {
+      params.push(category);
+      query += ` AND p.category = $${params.length}`;
+    }
+    if (minPrice) {
+      params.push(minPrice);
+      query += ` AND p.price >= $${params.length}`;
+    }
+    if (maxPrice) {
+      params.push(maxPrice);
+      query += ` AND p.price <= $${params.length}`;
+    }
+
+    query += " ORDER BY p.created_at DESC";
+    const result = await db.query(query, params);
+
+    result.rows.forEach((p) => {
+      if (p.thumbnail) p.thumbnail = `${BASE_URL}${p.thumbnail}`;
+    });
+
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 };
 
@@ -228,7 +271,7 @@ exports.updateProperty = async (req, res) => {
 
   let client;
   try {
-    client = await db.pool.connect(); // Get a raw client for transaction
+    client = await db.pool.connect();
     await client.query("BEGIN");
 
     const propertyCheck = await client.query(
@@ -438,15 +481,62 @@ exports.addToWaitlist = async (req, res) => {
   }
 };
 
+exports.removeFromWaitlist = async (req, res) => {
+  try {
+    const { property_id } = req.params;
+    const user_id = req.user.id;
+    await db.query(
+      "DELETE FROM waitlist WHERE user_id = $1 AND property_id = $2",
+      [user_id, property_id],
+    );
+    res.json({ message: "Removed from waitlist" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 exports.logView = async (req, res) => {
   try {
     const { property_id } = req.body;
     await db.query(
       `INSERT INTO property_views (user_id, property_id) VALUES ($1, $2) 
-                    ON CONFLICT (user_id, property_id) DO UPDATE SET viewed_at = NOW()`,
+       ON CONFLICT (user_id, property_id) DO UPDATE SET viewed_at = NOW()`,
       [req.user.id, property_id],
     );
     res.sendStatus(200);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.getViewed = async (req, res) => {
+  try {
+    const user_id = req.user.id;
+    const result = await db.query(
+      `
+      SELECT p.* FROM property_views pv 
+      JOIN properties p ON pv.property_id = p.id 
+      WHERE pv.user_id = $1 
+      ORDER BY pv.viewed_at DESC`,
+      [user_id],
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.getUserWaitlist = async (req, res) => {
+  try {
+    const user_id = req.user.id;
+    const result = await db.query(
+      `
+      SELECT p.* FROM waitlist w 
+      JOIN properties p ON w.property_id = p.id 
+      WHERE w.user_id = $1`,
+      [user_id],
+    );
+    res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -480,6 +570,44 @@ exports.getPaidCommissions = async (req, res) => {
       "SELECT * FROM property_commissions WHERE status = 'paid'",
     );
     res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getUnpaidCommissions = async (req, res) => {
+  try {
+    const result = await db.query(
+      "SELECT * FROM property_commissions WHERE status = 'unpaid'",
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getInquiriesByOwner = async (req, res) => {
+  try {
+    const { owner_id } = req.params;
+    const result = await db.query(
+      "SELECT * FROM inquiries WHERE owner_id = $1 ORDER BY created_at DESC",
+      [owner_id],
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.addInquiry = async (req, res) => {
+  try {
+    const { property_id, owner_id, message } = req.body;
+    const seeker_id = req.user.id;
+    const result = await db.query(
+      "INSERT INTO inquiries (property_id, owner_id, seeker_id, message, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING *",
+      [property_id, owner_id, seeker_id, message],
+    );
+    res.status(201).json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
