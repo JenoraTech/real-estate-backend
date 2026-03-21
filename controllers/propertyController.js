@@ -157,7 +157,7 @@ exports.getAllProperties = async (req, res) => {
           owner_id::text AS owner_id,
           COALESCE(ROUND(AVG(rating)::numeric, 1), 0.0) AS avg_rating,
           COUNT(*)::int AS total_reviews
-        FROM "Reviews" 
+        FROM reviews 
         GROUP BY owner_id::text
       ) r ON r.owner_id::text = p.owner_id::text
       LEFT JOIN LATERAL (
@@ -583,7 +583,7 @@ exports.getPropertyById = async (req, res) => {
         ) as image_urls,
         (
           SELECT COALESCE(ROUND(AVG(rating)::numeric, 1), 0.0) 
-          FROM "Reviews" 
+          FROM reviews 
           WHERE property_id::text = p.id::text
         ) as average_rating
       FROM properties p 
