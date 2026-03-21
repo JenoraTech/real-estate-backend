@@ -8,28 +8,24 @@ const db = {
   query: async (text, params) => {
     const isSelect = text.trim().toUpperCase().startsWith("SELECT");
 
-    const [results, metadata] = await dbConfig.sequelize.query(text, {
+    const results = await dbConfig.sequelize.query(text, {
       bind: params || [],
       type: isSelect
         ? dbConfig.sequelize.QueryTypes.SELECT
         : dbConfig.sequelize.QueryTypes.RAW,
     });
 
-    // ✅ FIX: In Sequelize SELECT mode, results IS the array of rows.
-    // In RAW mode (for UPDATE/INSERT), the rows are usually in results.rows.
     let rows = [];
+
     if (isSelect) {
-      rows = Array.isArray(results) ? results : [results];
+      rows = results; // ✅ already an array
     } else {
-      rows = results?.rows || (Array.isArray(results) ? results : [results]);
+      rows = results?.rows || [];
     }
 
-    // Final safety: filter out any null/empty ghost objects
-    const finalRows = rows.filter((row) => row && Object.keys(row).length > 0);
-
     return {
-      rows: finalRows || [],
-      rowCount: finalRows.length,
+      rows,
+      rowCount: rows.length,
     };
   },
 };
