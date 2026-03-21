@@ -3,7 +3,8 @@ const router = express.Router();
 const propertyController = require("../controllers/propertyController");
 const upload = require("../middleware/upload");
 
-// ✅ Clean destructuring from the updated middleware/auth.js
+// ✅ Clean destructuring from your updated middleware/auth.js
+// Note: verifyToken is the 'pg' version of your previous 'protect' logic
 const { verifyToken, isAdmin } = require("../middleware/auth");
 
 // --- PUBLIC ROUTES ---
@@ -25,21 +26,19 @@ router.get("/", propertyController.getAllProperties);
 // Waitlist Logic (Moved ABOVE /:id to prevent UUID syntax errors)
 /**
  * @route   GET /api/properties/waitlist
- * @desc    For sync
+ * @desc    Get current user's waitlist
  */
 router.get("/waitlist", verifyToken, propertyController.getUserWaitlist);
 
 /**
  * @route   POST /api/properties/waitlist
- * @desc    Add a property to the user's waitlist (Creates a Lead) / For hearting
- * @access  Private (Seekers/Users)
+ * @desc    Add a property to the user's waitlist (Hearting)
  */
 router.post("/waitlist", verifyToken, propertyController.addToWaitlist);
 
 /**
  * @route   DELETE /api/properties/waitlist/:property_id
- * @desc    Remove a property from the user's waitlist / For un-hearting
- * @access  Private (Seekers/Users)
+ * @desc    Remove a property from the user's waitlist (Un-hearting)
  */
 router.delete(
   "/waitlist/:property_id",
@@ -61,13 +60,12 @@ router.post("/viewed", verifyToken, propertyController.logView);
 /**
  * @route   POST /api/properties/inquiry
  * @desc    Create a new inquiry (Seeker sends message to Owner)
- * @access  Private (Seekers)
  */
 router.post("/inquiry", verifyToken, propertyController.addInquiry);
 
 /**
  * @route   POST /api/properties
- * @access  Private (Admin/Owner)
+ * @desc    Create a new property listing
  */
 router.post(
   "/",
@@ -90,7 +88,6 @@ router.get(
 /**
  * @route   GET /api/properties/owner/inquiries/:owner_id
  * @desc    Get all inquiries sent to a specific owner's properties
- * @access  Private (Owner/Admin)
  */
 router.get(
   "/owner/inquiries/:owner_id",
@@ -133,7 +130,6 @@ router.get(
 /**
  * @route   GET /api/properties/admin/leads
  * @desc    Matches the Flutter call for seeker interest
- * @access  Private (Main Admin & Sub-Admins)
  */
 router.get(
   "/admin/leads",
@@ -152,7 +148,7 @@ router.get("/:id", propertyController.getPropertyById);
 
 /**
  * @route   PUT /api/properties/:id
- * @access  Private (Owner/Admin)
+ * @desc    Update property details
  */
 router.put(
   "/:id",
@@ -163,7 +159,7 @@ router.put(
 
 /**
  * @route   DELETE /api/properties/:id
- * @access  Private (Owner/Admin)
+ * @desc    Delete a property listing
  */
 router.delete("/:id", verifyToken, propertyController.deleteProperty);
 

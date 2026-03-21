@@ -1,124 +1,97 @@
 const express = require("express");
 const router = express.Router();
-const { Review, User, Property } = require("../models"); // ✅ Updated to include User and Property model
-
-// ✅ FIX: Destructure 'protect' from the middleware object
+const db = require("../config/db"); // ✅ Uses the new PG Pool
 const { protect } = require("../middleware/auth");
 
-// Post a new review
-// We use 'protect' here to ensure the seeker is logged in
+// ======================= POST A NEW REVIEW =======================
 router.post("/add", protect, async (req, res) => {
   try {
-    const { owner_id, property_id, rating, comment } = req.body; // ✅ Added property_id
+    const { owner_id, property_id, rating, comment } = req.body;
 
-    // Safety check: Ensure the middleware attached the user successfully
+    // Safety check for user from middleware
     if (!req.user || !req.user.id) {
-      return res
-        .status(401)
-        .json({ error: "Unauthorized: User ID not found in token" });
+      return res.status(401).json({ error: "Unauthorized: User ID not found" });
     }
 
     const seeker_id = req.user.id;
 
-    const review = await Review.create({
+    // 1️⃣ Insert the Review
+    const insertQuery = `
+      INSERT INTO reviews (seeker_id, owner_id, property_id, rating, comment, created_at)
+      VALUES ($1, $2, $3, $4, $5, NOW())
+      RETURNING *
+    `;
+    const reviewResult = await db.query(insertQuery, [
       seeker_id,
       owner_id,
-      property_id, // ✅ Now saving property_id in the review
+      property_id,
       rating,
       comment,
-    });
+    ]);
+    const newReview = reviewResult.rows[0];
 
-    // ✅ NEW: Recalculate and update Owner's average rating
+    // 2️⃣ Recalculate and Update Owner/Property Stats
     try {
-      // 1. Get all reviews for this specific owner
-      const allOwnerReviews = await Review.findAll({
-        where: { owner_id: owner_id },
-      });
+      // Update Owner Average Rating & Total Reviews
+      const ownerStatsQuery = `
+        UPDATE users 
+        SET 
+          average_rating = (SELECT ROUND(AVG(rating), 2) FROM reviews WHERE owner_id = $1),
+          total_reviews = (SELECT COUNT(*) FROM reviews WHERE owner_id = $1)
+        WHERE id = $1
+      `;
+      await db.query(ownerStatsQuery, [owner_id]);
 
-      // 2. Calculate the average for Owner
-      const totalOwnerRating = allOwnerReviews.reduce(
-        (sum, r) => sum + r.rating,
-        0,
-      );
-      const newOwnerAverage = (
-        totalOwnerRating / allOwnerReviews.length
-      ).toFixed(2);
-
-      // 3. Update the User record in the database
-      await User.update(
-        {
-          average_rating: newOwnerAverage,
-          total_reviews: allOwnerReviews.length,
-        },
-        { where: { id: owner_id } },
-      );
-
-      // ✅ 4. NEW: Recalculate and update Property's average rating if property_id is provided
+      // Update Property Average Rating & Total Reviews (if property_id exists)
       if (property_id) {
-        const allPropertyReviews = await Review.findAll({
-          where: { property_id: property_id },
-        });
-
-        const totalPropRating = allPropertyReviews.reduce(
-          (sum, r) => sum + r.rating,
-          0,
-        );
-        const newPropAverage = (
-          totalPropRating / allPropertyReviews.length
-        ).toFixed(2);
-
-        await Property.update(
-          {
-            average_rating: newPropAverage,
-            total_reviews: allPropertyReviews.length,
-          },
-          { where: { id: property_id } },
-        );
-
-        console.log(
-          `🏠 Updated Property ${property_id}: Avg ${newPropAverage} (${allPropertyReviews.length} reviews)`,
-        );
+        const propertyStatsQuery = `
+          UPDATE properties 
+          SET 
+            average_rating = (SELECT ROUND(AVG(rating), 2) FROM reviews WHERE property_id = $1),
+            total_reviews = (SELECT COUNT(*) FROM reviews WHERE property_id = $1)
+          WHERE id = $1
+        `;
+        await db.query(propertyStatsQuery, [property_id]);
       }
-
-      console.log(
-        `⭐ Updated Owner ${owner_id}: Avg ${newOwnerAverage} (${allOwnerReviews.length} reviews)`,
-      );
     } catch (updateError) {
       console.error(
-        "⚠️ Failed to update owner or property average, but review was saved:",
-        updateError,
+        "⚠️ Review saved, but stats update failed:",
+        updateError.message,
       );
-      // We don't return an error here because the review itself was successfully saved
     }
 
-    res.status(201).json(review);
+    res.status(201).json(newReview);
   } catch (error) {
     console.error("Review Creation Error:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Get all reviews for a specific owner
+// ======================= GET REVIEWS FOR OWNER =======================
 router.get("/owner/:ownerId", async (req, res) => {
   try {
-    const reviews = await Review.findAll({
-      where: { owner_id: req.params.ownerId },
-      order: [["createdAt", "DESC"]],
-    });
-    res.json(reviews);
+    const query = `
+      SELECT * FROM reviews 
+      WHERE owner_id = $1 
+      ORDER BY created_at DESC
+    `;
+    const result = await db.query(query, [req.params.ownerId]);
+    res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// ✅ ADDED: Get all reviews for a specific property
+// ======================= GET REVIEWS FOR PROPERTY =======================
 router.get("/property/:propertyId", async (req, res) => {
   try {
-    const reviews = await Review.findAll({
-      where: { property_id: req.params.propertyId },
-      order: [["createdAt", "DESC"]],
-    });
-    res.json(reviews);
+    const query = `
+      SELECT * FROM reviews 
+      WHERE property_id = $1 
+      ORDER BY created_at DESC
+    `;
+    const result = await db.query(query, [req.params.propertyId]);
+    res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

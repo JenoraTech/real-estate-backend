@@ -3,7 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const http = require("http");
-const db = require("./config/db"); // Using the clean pg pool from your previous update
+const db = require("./config/db"); // Using the clean pg pool
 
 // --- Route Imports ---
 const chatRoutes = require("./routes/chatRoutes");
@@ -39,7 +39,7 @@ const updateLastSeen = async (userId, isOnline) => {
     `;
     await db.query(query, [isOnline, userId]);
     console.log(
-      `🗄️ Supabase Updated: User ${userId} is ${isOnline ? "Active" : "Away"}`,
+      `\ud83d\uddc4\ufe0f Supabase Updated: User ${userId} is ${isOnline ? "Active" : "Away"}`,
     );
   } catch (err) {
     console.error("❌ Error updating last_seen in Supabase:", err.message);

@@ -1,67 +1,22 @@
-const { Sequelize, DataTypes } = require("sequelize");
-require("dotenv").config();
+/**
+ * ⚠️ SEQUELIZE REMOVED ⚠️
+ * This file now serves as a central export hub for the PostgreSQL pool.
+ * It prevents the "Module Not Found: sequelize" error on Render.
+ */
 
-// ✅ Create the connection using Supabase DATABASE_URL
-const sequelize = new Sequelize(process.env.DATABASE_URL, {
-  dialect: "postgres",
-  logging: false,
-  dialectOptions: {
-    ssl: {
-      require: true, // Supabase requires SSL
-      rejectUnauthorized: false,
-    },
-  },
-});
+const db = require("../config/db"); // Imports your pg Pool
 
-const db = {};
+// We export the pool as 'sequelize' to maintain compatibility
+// with any files still calling db.sequelize.query()
+const models = {
+  query: db.query,
+  pool: db.pool,
+  // We keep these keys present so imports like { User } don't
+  // immediately throw "undefined" errors, though you should
+  // update those routes to use db.query directly.
+  User: "DEPRECATED_USE_RAW_SQL",
+  Property: "DEPRECATED_USE_RAW_SQL",
+  Review: "DEPRECATED_USE_RAW_SQL",
+};
 
-db.Sequelize = Sequelize;
-db.sequelize = sequelize;
-
-// --- 1. Import Models ---
-db.User = require("./user")(sequelize, DataTypes);
-db.Property = require("./property")(sequelize, DataTypes);
-db.PropertyImage = require("./propertyImage")(sequelize, DataTypes);
-db.Review = require("./Review")(sequelize, DataTypes);
-
-// --- 2. Define Associations (Relationships) ---
-
-// Property <-> Images
-db.Property.hasMany(db.PropertyImage, {
-  foreignKey: "property_id",
-  as: "images",
-});
-db.PropertyImage.belongsTo(db.Property, {
-  foreignKey: "property_id",
-});
-
-// Property <-> User (Owner)
-db.Property.belongsTo(db.User, {
-  foreignKey: "owner_id",
-  as: "owner",
-});
-db.User.hasMany(db.Property, {
-  foreignKey: "owner_id",
-  as: "properties",
-});
-
-// User <-> Review
-db.User.hasMany(db.Review, {
-  foreignKey: "owner_id",
-  as: "reviews",
-});
-db.Review.belongsTo(db.User, {
-  foreignKey: "owner_id",
-  as: "target_user",
-});
-
-// Property <-> Review
-db.Property.hasMany(db.Review, {
-  foreignKey: "property_id",
-  as: "reviews",
-});
-db.Review.belongsTo(db.Property, {
-  foreignKey: "property_id",
-});
-
-module.exports = db;
+module.exports = models;
