@@ -2,15 +2,8 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
-const http = require("http"); // Required for Socket.io
-
-// --- Database Integration ---
-// Using your config/db.js which now points to Supabase
-const db = require("./config/db");
-const db_pg = db.sequelize; // Use the Sequelize instance for raw queries to share the connection pool
-
-// --- Sequelize Models ---
-const Property = db.Property;
+const http = require("http");
+const db = require("./config/db"); // Using the clean pg pool from your previous update
 
 // --- Route Imports ---
 const chatRoutes = require("./routes/chatRoutes");
@@ -33,22 +26,18 @@ const io = require("socket.io")(server, {
   pingInterval: 25000,
 });
 
-// A map to track which User ID is on which Socket ID
 const userSocketMap = {};
 
-// ✅ Updated Helper: Uses Sequelize for Supabase Compatibility
+// ✅ Clean PG Helper: No Sequelize replacements
 const updateLastSeen = async (userId, isOnline) => {
   if (!userId || userId === "UNKNOWN_USER") return;
   try {
     const query = `
       UPDATE users 
-      SET last_seen = NOW(), is_online = :isOnline 
-      WHERE id::text = :userId OR new_id::text = :userId
+      SET last_seen = NOW(), is_online = $1 
+      WHERE id::text = $2 OR new_id::text = $2
     `;
-    await db_pg.query(query, {
-      replacements: { isOnline, userId },
-      type: db.Sequelize.QueryTypes.UPDATE,
-    });
+    await db.query(query, [isOnline, userId]);
     console.log(
       `🗄️ Supabase Updated: User ${userId} is ${isOnline ? "Active" : "Away"}`,
     );
@@ -78,7 +67,6 @@ io.on("connection", (socket) => {
   socket.on("join_chat", (data) => {
     const myId = data.myUserId || data.userId;
     if (myId) {
-      console.log(`📖 User ${myId} entered chat screen.`);
       updateLastSeen(myId, true);
       io.emit("user_status_update", {
         userId: myId,
@@ -91,7 +79,6 @@ io.on("connection", (socket) => {
   socket.on("leave_chat", (data) => {
     const myId = data.myUserId || data.userId;
     if (myId) {
-      console.log(`🚪 User ${myId} left chat screen.`);
       updateLastSeen(myId, false);
       io.emit("user_status_update", {
         userId: myId,
@@ -103,7 +90,6 @@ io.on("connection", (socket) => {
 
   socket.on("send_message", (data) => {
     const receiverId = data.receiver_id || data.receiverId;
-    console.log(`📩 Message from ${data.sender_id} to ${receiverId}`);
     updateLastSeen(data.sender_id, true);
     socket.to(receiverId).emit("new_message", data);
     socket.to(data.sender_id).emit("new_message", data);
@@ -114,7 +100,6 @@ io.on("connection", (socket) => {
       (key) => userSocketMap[key] === socket.id,
     );
     if (disconnectedUserId) {
-      console.log(`🔴 User ${disconnectedUserId} disconnected`);
       updateLastSeen(disconnectedUserId, false);
       delete userSocketMap[disconnectedUserId];
       io.emit("user_status_update", {
@@ -127,24 +112,10 @@ io.on("connection", (socket) => {
 });
 
 // --- Middleware ---
-app.use(
-  cors({
-    origin: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Requested-With",
-      "Accept",
-    ],
-    credentials: true,
-  }),
-);
-
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
-// ✅ STATIC FILE SERVING (CRITICAL FOR IMAGES)
-// This ensures that http://.../uploads/properties/image.jpg maps correctly to the folder
+// ✅ STATIC FILE SERVING
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use(
   "/uploads/properties",
@@ -160,10 +131,10 @@ app.use((req, res, next) => {
 // --- Health Check ---
 app.get("/test-db", async (req, res) => {
   try {
-    const [result] = await db_pg.query("SELECT NOW()");
+    const result = await db.query("SELECT NOW()");
     res.json({
-      message: "Supabase Connected!",
-      server_time: result[0].now,
+      message: "Supabase Connected via PG Pool!",
+      server_time: result.rows[0].now,
     });
   } catch (err) {
     res
@@ -181,37 +152,30 @@ app.use("/api/chat", chatRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/admin", adminRoutes);
 
-// --- Revenue Tracking & Contact Logic ---
+// --- Revenue Tracking ---
 app.post("/api/contact-log", async (req, res) => {
   const { seeker_id, owner_id, property_id, price } = req.body;
   const COMMISSION_RATE = 0.025;
-  const owner_commission = price * COMMISSION_RATE;
-  const seeker_commission = price * COMMISSION_RATE;
-  const total_admin_revenue = owner_commission + seeker_commission;
+  const owner_fee = price * COMMISSION_RATE;
+  const seeker_fee = price * COMMISSION_RATE;
+  const total_revenue = owner_fee + seeker_fee;
 
   try {
-    const [result] = await db_pg.query(
+    const result = await db.query(
       `INSERT INTO interest_logs 
       (seeker_id, owner_id, property_id, owner_commission_rate, seeker_commission_rate, total_admin_revenue, status) 
-      VALUES (:seeker_id, :owner_id, :property_id, 2.5, 2.5, :revenue, 'pending') RETURNING *`,
-      {
-        replacements: {
-          seeker_id,
-          owner_id,
-          property_id,
-          revenue: total_admin_revenue,
-        },
-      },
+      VALUES ($1, $2, $3, 2.5, 2.5, $4, 'pending') RETURNING *`,
+      [seeker_id, owner_id, property_id, total_revenue],
     );
 
     res.status(201).json({
-      message: "Contact logged. Service charges calculated.",
+      message: "Contact logged successfully.",
       data: {
-        log: result[0],
+        log: result.rows[0],
         breakdown: {
-          owner_fee: owner_commission,
-          seeker_fee: seeker_commission,
-          total_payable_by_seeker: parseFloat(price) + seeker_commission,
+          owner_fee,
+          seeker_fee,
+          total_payable_by_seeker: parseFloat(price) + seeker_fee,
         },
       },
     });
@@ -221,34 +185,23 @@ app.post("/api/contact-log", async (req, res) => {
   }
 });
 
-// --- Root & Error Handlers ---
 app.get("/", (req, res) =>
-  res.send("🚀 Real Estate API is running on Supabase..."),
+  res.send("🚀 Real Estate API is running on Supabase (PG)..."),
 );
 app.use((req, res) => res.status(404).json({ error: "Route not found" }));
-app.use((err, req, res, next) => {
-  console.error("GLOBAL ERROR:", err.stack);
-  res
-    .status(500)
-    .json({ error: "Internal Server Error", message: err.message });
-});
 
 // --- Server Startup ---
 const PORT = process.env.PORT || 5000;
 
-db.sequelize
-  .authenticate()
+// Simple connection check using the PG Pool
+db.query("SELECT 1")
   .then(() => {
-    console.log("🚀 Database (Sequelize) connected successfully.");
-    // sync({ alter: false }) protects your cloud data
-    return db.sequelize.sync({ alter: false });
-  })
-  .then(() => {
+    console.log("🚀 Database (PostgreSQL Pool) connected successfully.");
     server.listen(PORT, "0.0.0.0", () => {
       console.log(`\n==============================================`);
       console.log(`🚀 Server active on Port: ${PORT}`);
       console.log(`💰 Commission: 2.5% Owner / 2.5% Seeker`);
-      console.log(`📡 Socket.io: Enabled with Cloud Compatibility`);
+      console.log(`📡 Socket.io: Enabled`);
       console.log(`==============================================\n`);
     });
   })
@@ -257,7 +210,6 @@ db.sequelize
     process.exit(1);
   });
 
-// Handle Port cleanup on restart
 process.on("SIGINT", () => {
   server.close(() => {
     console.log("\n🛑 Port 5000 released.");

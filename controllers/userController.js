@@ -1,47 +1,14 @@
 const bcrypt = require("bcryptjs");
-const dbConfig = require("../config/db"); // Renamed to avoid confusion
+const db = require("../config/db"); // Now uses the clean pg library
 const jwt = require("jsonwebtoken");
-
-// ✅ THE CRITICAL BRIDGE:
-// Fixed to ensure multiple rows (like all 4 users) are returned correctly.
-const db = {
-  query: async (text, params) => {
-    const isSelect = text.trim().toUpperCase().startsWith("SELECT");
-
-    const results = await dbConfig.sequelize.query(text, {
-      bind: params || [],
-      type: isSelect
-        ? dbConfig.sequelize.QueryTypes.SELECT
-        : dbConfig.sequelize.QueryTypes.RAW,
-    });
-
-    let rows = [];
-
-    if (isSelect) {
-      rows = results; // ✅ already an array
-    } else {
-      rows = results?.rows || [];
-    }
-
-    return {
-      rows,
-      rowCount: rows.length,
-    };
-  },
-};
-
-// Supporting the different variable names used in your code
-const pool = db;
-const db_pg = dbConfig.sequelize;
 
 /**
  * @desc    Fetch all users for Admin Dashboard
- * @access  Privatea/Admin
+ * @access  Private/Admin
  */
 exports.getAllUsers = async (req, res) => {
   try {
-    // We fetch the exact column names: full_name and user_role
-    // This ensures Flutter's data['full_name'] is not null [cite: 2026-03-02]
+    // The standard 'pg' library returns result.rows as a clean array
     const result = await db.query(
       "SELECT id, full_name, email, user_role, is_blocked FROM users ORDER BY created_at DESC",
     );
@@ -81,9 +48,12 @@ exports.toggleUserBlock = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Get Admin ID for Support/Chat
+ */
 exports.getAdminId = async (req, res) => {
   try {
-    const result = await pool.query(
+    const result = await db.query(
       "SELECT id, full_name FROM users WHERE LOWER(user_role) = LOWER($1) LIMIT 1",
       ["admin"],
     );
@@ -97,7 +67,7 @@ exports.getAdminId = async (req, res) => {
     res.json({
       success: true,
       admin_id: result.rows[0].id,
-      admin_name: result.rows[0].full_name || "App Support", // Pass the name too
+      admin_name: result.rows[0].full_name || "App Support",
     });
   } catch (error) {
     console.error("Database Error:", error);
@@ -105,28 +75,26 @@ exports.getAdminId = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Accept Terms and Conditions
+ */
 exports.acceptTerms = async (req, res) => {
   try {
-    // req.user.id is populated by your verifyToken middleware
     const userId = req.user.id;
 
     if (!userId) {
       return res.status(401).json({ error: "User ID not found in token" });
     }
 
-    // ✅ FIXED: Added 'RETURNING *' so result.rows[0] is actually populated
     const query =
       "UPDATE users SET has_accepted_terms = true WHERE id = $1 RETURNING *";
 
-    // ✅ Using await with db.query for PostgreSQL
     const result = await db.query(query, [userId]);
 
-    // In pg, result.rowCount tells you how many rows were updated
     if (result.rowCount === 0) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // ✅ Now result.rows[0] exists because of the RETURNING clause
     res.status(200).json({
       success: true,
       has_accepted_terms: result.rows[0].has_accepted_terms,
