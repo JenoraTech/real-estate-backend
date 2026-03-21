@@ -1,6 +1,27 @@
-const db = require("../config/db");
+const dbConfig = require("../config/db"); // Renamed to avoid confusion
 // Use this to keep your existing code working with Sequelize
-const db_pg = db.sequelize;
+const db_pg = dbConfig.sequelize;
+
+// ✅ THE CRITICAL BRIDGE:
+// This ensures that 'db.query' calls work with your Sequelize/Supabase setup.
+const db = {
+  query: async (text, params) => {
+    const isSelect = text.trim().toUpperCase().startsWith("SELECT");
+    const [results, metadata] = await dbConfig.sequelize.query(text, {
+      bind: params || [],
+      type: isSelect
+        ? dbConfig.sequelize.QueryTypes.SELECT
+        : dbConfig.sequelize.QueryTypes.RAW,
+    });
+
+    // Normalize response to match 'result.rows' format
+    const rows = Array.isArray(results) ? results : results?.rows || [results];
+    return {
+      rows: rows || [],
+      rowCount: Array.isArray(rows) ? rows.length : metadata?.rowCount || 0,
+    };
+  },
+};
 
 // 1. Fetch all properties that are waiting for approval
 exports.getPendingProperties = async (req, res) => {
@@ -11,12 +32,15 @@ exports.getPendingProperties = async (req, res) => {
        ORDER BY created_at DESC`,
     );
 
-    // Ensure images have full URLs
-    const BASE_URL = "http://172.20.10.4:5000/";
+    // ✅ UPDATED: Using your Render URL instead of the local IP for images
+    const BASE_URL = "https://real-estate-backend-4kfq.onrender.com/";
     const properties = result.rows.map((prop) => ({
       ...prop,
       image_urls: prop.image_urls
-        ? prop.image_urls.map((url) => `${BASE_URL}${url}`)
+        ? prop.image_urls.map((url) => {
+            // If the URL is already absolute, don't prepend the BASE_URL
+            return url.startsWith("http") ? url : `${BASE_URL}${url}`;
+          })
         : [],
     }));
 
@@ -98,6 +122,7 @@ exports.getAdminStats = async (req, res) => {
       estimatedRevenue: totalRevenue.rows[0].sum || 0,
     });
   } catch (err) {
+    console.error("Stats Error:", err.message);
     res.status(500).json({ error: "Failed to fetch stats" });
   }
 };
