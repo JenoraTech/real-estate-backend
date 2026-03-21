@@ -14,11 +14,19 @@ const db = {
         : dbConfig.sequelize.QueryTypes.RAW,
     });
 
-    // Normalize response to match 'result.rows' format
-    const rows = Array.isArray(results) ? results : results?.rows || [results];
+    // ✅ REFINED NORMALIZATION:
+    // This ensures that if 0 rows are found, we return [].
+    // It filters out empty objects to prevent "Ghost Rows" in the UI.
+    let rows = [];
+    if (Array.isArray(results)) {
+      rows = results.filter((row) => row && Object.keys(row).length > 0);
+    } else if (results && results.rows) {
+      rows = results.rows.filter((row) => row && Object.keys(row).length > 0);
+    }
+
     return {
-      rows: rows || [],
-      rowCount: Array.isArray(rows) ? rows.length : metadata?.rowCount || 0,
+      rows: rows, // Will be [] if no properties found
+      rowCount: rows.length,
     };
   },
 };
@@ -133,10 +141,10 @@ exports.getAdminStats = async (req, res) => {
     );
 
     res.status(200).json({
-      totalUsers: parseInt(userCount.rows[0].count || 0),
-      totalProperties: parseInt(propertyCount.rows[0].count || 0),
-      pendingApprovals: parseInt(pendingCount.rows[0].count || 0),
-      estimatedRevenue: totalRevenue.rows[0].sum || 0,
+      totalUsers: parseInt(userCount.rows[0]?.count || 0),
+      totalProperties: parseInt(propertyCount.rows[0]?.count || 0),
+      pendingApprovals: parseInt(pendingCount.rows[0]?.count || 0),
+      estimatedRevenue: totalRevenue.rows[0]?.sum || 0,
     });
   } catch (err) {
     console.error("Stats Error:", err.message);
