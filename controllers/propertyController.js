@@ -126,8 +126,8 @@ exports.createProperty = async (req, res) => {
     }
 
     const responseProperty = newProperty.rows[0];
-    responseProperty.image_urls = imageUrlsArray.map(
-      (url) => `${BASE_URL}${url}`,
+    responseProperty.image_urls = imageUrlsArray.map((url) =>
+      url.startsWith("http") ? url : `${BASE_URL}${url}`,
     );
 
     res.status(201).json({
@@ -224,7 +224,11 @@ exports.searchProperties = async (req, res) => {
     const result = await db.query(query, params);
 
     result.rows.forEach((p) => {
-      if (p.thumbnail) p.thumbnail = `${BASE_URL}${p.thumbnail}`;
+      if (p.thumbnail) {
+        if (!p.thumbnail.startsWith("http")) {
+          p.thumbnail = `${BASE_URL}${p.thumbnail}`;
+        }
+      }
     });
 
     res.json(result.rows);
@@ -247,9 +251,15 @@ exports.getPropertiesByOwner = async (req, res) => {
     `;
     const result = await db.query(queryText, [owner_id]);
     result.rows.forEach((p) => {
-      if (p.thumbnail) p.thumbnail = `${BASE_URL}${p.thumbnail}`;
+      if (p.thumbnail) {
+        if (!p.thumbnail.startsWith("http")) {
+          p.thumbnail = `${BASE_URL}${p.thumbnail}`;
+        }
+      }
       if (p.image_urls)
-        p.image_urls = p.image_urls.map((url) => `${BASE_URL}${url}`);
+        p.image_urls = p.image_urls.map((url) =>
+          url.startsWith("http") ? url : `${BASE_URL}${url}`,
+        );
     });
     res.json(result.rows);
   } catch (err) {
@@ -377,7 +387,9 @@ exports.updateProperty = async (req, res) => {
     await client.query("COMMIT");
     const result = updatedProperty.rows[0];
     if (result.image_urls)
-      result.image_urls = result.image_urls.map((url) => `${BASE_URL}${url}`);
+      result.image_urls = result.image_urls.map((url) =>
+        url.startsWith("http") ? url : `${BASE_URL}${url}`,
+      );
     res
       .status(200)
       .json({ message: "Property updated successfully", property: result });

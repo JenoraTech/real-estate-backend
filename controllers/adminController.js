@@ -32,6 +32,7 @@ exports.getPendingProperties = async (req, res) => {
         cleanProp.image_urls = cleanProp.image_urls.map((url) => {
           if (!url) return "";
           const sanitizedUrl = url.replace(/\\/g, "/");
+          // FIX: Only prepend BASE_URL if it doesn't already start with http
           return sanitizedUrl.startsWith("http")
             ? sanitizedUrl
             : `${BASE_URL}${sanitizedUrl}`;
@@ -43,8 +44,11 @@ exports.getPendingProperties = async (req, res) => {
       // Safety: Handle thumbnail
       if (cleanProp.thumbnail) {
         const sanitizedThumb = cleanProp.thumbnail.replace(/\\/g, "/");
+        // FIX: Only prepend BASE_URL if it doesn't already start with http
         if (!sanitizedThumb.startsWith("http")) {
           cleanProp.thumbnail = `${BASE_URL}${sanitizedThumb}`;
+        } else {
+          cleanProp.thumbnail = sanitizedThumb;
         }
       }
 
@@ -70,11 +74,11 @@ exports.approveProperty = async (req, res) => {
     // Added ::text casting for UUID/String compatibility
     const result = await db.query(
       `UPDATE properties 
-       SET is_approved = true, 
-           status = 'active', 
-           updated_at = NOW() 
-       WHERE id::text = $1 
-       RETURNING *`,
+        SET is_approved = true, 
+            status = 'active', 
+            updated_at = NOW() 
+        WHERE id::text = $1 
+        RETURNING *`,
       [id],
     );
 
