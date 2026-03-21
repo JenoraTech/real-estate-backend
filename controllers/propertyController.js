@@ -678,3 +678,58 @@ exports.updateCommissionStatus = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+// ======================= GET NEARBY PROPERTIES =======================
+exports.getNearbyProperties = async (req, res) => {
+  try {
+    const { lat, lng, radius = 10 } = req.query;
+
+    if (!lat || !lng) {
+      return res
+        .status(400)
+        .json({ error: "Latitude and longitude are required" });
+    }
+
+    // Haversine formula to calculate distance in km
+    // 6371 is the radius of Earth in kilometers
+    const queryText = `
+      SELECT *, 
+      (6371 * acos(
+        cos(radians($1)) * cos(radians(latitude)) * cos(radians(longitude) - radians($2)) + 
+        sin(radians($1)) * sin(radians(latitude))
+      )) AS distance
+      FROM properties
+      WHERE is_approved = true
+      AND is_hidden = false
+      GROUP BY id
+      HAVING (6371 * acos(
+        cos(radians($1)) * cos(radians(latitude)) * cos(radians(longitude) - radians($2)) + 
+        sin(radians($1)) * sin(radians(latitude))
+      )) < $3
+      ORDER BY distance ASC
+    `;
+
+    const result = await db.query(queryText, [
+      parseFloat(lat),
+      parseFloat(lng),
+      parseFloat(radius),
+    ]);
+
+    // Format the image URLs (just like we did for getPending)
+    const properties = result.rows.map((prop) => {
+      const cleanProp = { ...prop };
+      if (cleanProp.thumbnail && !cleanProp.thumbnail.startsWith("http")) {
+        cleanProp.thumbnail = `${BASE_URL}${cleanProp.thumbnail.replace(/\\/g, "/")}`;
+      }
+      return cleanProp;
+    });
+
+    // IMPORTANT: Flutter expects { "data": [...] }
+    res.status(200).json({
+      success: true,
+      data: properties,
+    });
+  } catch (err) {
+    console.error("❌ Nearby Fetch Error:", err.message);
+    res.status(500).json({ error: "Failed to fetch nearby properties" });
+  }
+};

@@ -138,6 +138,9 @@ router.get(
   propertyController.getAdminLeads,
 );
 
+// Ensure this is ABOVE any routes with /:id parameters
+router.get("/nearby", propertyController.getNearbyProperties);
+
 // --- DYNAMIC ID ROUTES (MUST BE AT THE BOTTOM) ---
 
 /**
