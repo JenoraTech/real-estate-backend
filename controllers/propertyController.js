@@ -552,19 +552,43 @@ exports.getViewed = async (req, res) => {
 exports.getUserWaitlist = async (req, res) => {
   try {
     const user_id = req.user.id;
+
+    // 1. Get the raw data from the database
     const result = await db.query(
       `
-      SELECT p.* FROM waitlist w 
+      SELECT p.*, u.full_name as owner_name 
+      FROM waitlist w 
       JOIN properties p ON w.property_id::text = p.id::text 
-      WHERE w.user_id::text = $1`,
+      LEFT JOIN users u ON p.owner_id::text = u.id::text
+      WHERE w.user_id::text = $1
+      ORDER BY w.id DESC`, // Using ID or created_at to keep recent ones at top
       [user_id],
     );
-    res.json(result.rows);
+
+    // 2. Format the image URLs so Flutter can actually find them
+    const formattedProperties = result.rows.map((prop) => {
+      if (prop.thumbnail) {
+        // If the thumbnail is just "uploads/image.jpg", make it a full URL
+        // We also replace backslashes with forward slashes for URL compatibility
+        const cleanPath = prop.thumbnail.replace(/\\/g, "/");
+
+        if (!cleanPath.startsWith("http")) {
+          // Remove leading slash from path if it exists to avoid double //
+          const pathSnippet = cleanPath.startsWith("/")
+            ? cleanPath.substring(1)
+            : cleanPath;
+          prop.thumbnail = `${BASE_URL}${pathSnippet}`;
+        }
+      }
+      return prop;
+    });
+
+    res.json(formattedProperties);
   } catch (error) {
+    console.error("❌ Waitlist Error:", error.message);
     res.status(500).json({ error: error.message });
   }
 };
-
 exports.getPropertyById = async (req, res) => {
   try {
     const { id } = req.params;
